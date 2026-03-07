@@ -1,0 +1,2 @@
+[console_scripts]
+review-predictor = review_predictor.cli:main
