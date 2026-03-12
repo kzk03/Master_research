@@ -207,7 +207,7 @@ def train_and_evaluate_pattern(
 
     import numpy as np
     import torch
-    from review_predictor.model.rf_predictor import (
+    from review_predictor.IRL.model.rf_predictor import (
         extract_features_for_window,
         prepare_rf_features,
         train_and_evaluate_rf,
@@ -227,7 +227,7 @@ def train_and_evaluate_pattern(
         load_review_requests,
     )
 
-    from review_predictor.model.irl_predictor import RetentionIRLSystem
+    from review_predictor.IRL.model.irl_predictor import RetentionIRLSystem
 
     # データ読み込み
     df = load_review_requests(reviews_csv)

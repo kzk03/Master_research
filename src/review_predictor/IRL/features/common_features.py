@@ -35,6 +35,14 @@ ACTION_FEATURES = [
 
 FEATURE_NAMES = STATE_FEATURES + ACTION_FEATURES
 
+# normalize_features で使うキャップ値（1.0 以外のもの）
+_NORM_CAPS: Dict[str, float] = {
+    'experience_days': 730.0,   # 2年でキャップ
+    'total_changes':   500.0,
+    'total_reviews':   500.0,
+    'avg_activity_gap': 60.0,   # 60日でキャップ
+}
+
 
 def extract_common_features(
     df: pd.DataFrame,
@@ -66,7 +74,7 @@ def extract_common_features(
 
     if len(dev_data) == 0:
         # データがない場合はデフォルト値
-        return _get_default_features(normalize)
+        return _get_default_features()
 
     # ========================================
     # 状態特徴量（10次元）
@@ -74,13 +82,10 @@ def extract_common_features(
 
     # 1. experience_days: 経験日数
     dates = dev_data['timestamp'].sort_values()
-    experience_days = (feature_end - dates.iloc[0]).days if len(dates) > 0 else 0
+    experience_days = (feature_end - dates.iloc[0]).days
 
-    # 2. total_changes: 総変更数（レビュー依頼数と同じ）
-    total_changes = len(dev_data)
-
-    # 3. total_reviews: 総レビュー数（レビュー依頼数と同じ）
-    total_reviews = len(dev_data)
+    # 2/3. total_changes / total_reviews: 同一値（レビュー依頼数）
+    total_changes = total_reviews = len(dev_data)
 
     # 4. recent_activity_frequency: 直近30日の活動頻度
     recent_cutoff = feature_end - timedelta(days=30)
@@ -134,9 +139,6 @@ def extract_common_features(
     else:
         avg_action_intensity = 0.1
 
-    # 12. avg_collaboration: 平均協力度
-    avg_collaboration = collaboration_score  # 協力スコアと同じ
-
     # 13. avg_response_time: 平均応答時間（素早さに変換）
     if 'first_response_time' in dev_data.columns and 'request_time' in dev_data.columns:
         # request_timeとfirst_response_timeから応答時間を計算
@@ -177,7 +179,7 @@ def extract_common_features(
         'review_load': review_load,
         # 行動特徴量（4次元）
         'avg_action_intensity': avg_action_intensity,
-        'avg_collaboration': avg_collaboration,
+        'avg_collaboration': collaboration_score,
         'avg_response_time': avg_response_time,
         'avg_review_size': avg_review_size,
     }
@@ -199,25 +201,11 @@ def normalize_features(features: Dict[str, float]) -> Dict[str, float]:
     Returns:
         正規化された特徴量辞書
     """
-    normalized = {
-        # 状態特徴量
-        'experience_days': min(features['experience_days'] / 730.0, 1.0),  # 2年でキャップ
-        'total_changes': min(features['total_changes'] / 500.0, 1.0),  # 500件でキャップ
-        'total_reviews': min(features['total_reviews'] / 500.0, 1.0),  # 500件でキャップ
-        'recent_activity_frequency': min(features['recent_activity_frequency'], 1.0),
-        'avg_activity_gap': min(features['avg_activity_gap'] / 60.0, 1.0),  # 60日でキャップ
-        'activity_trend': features['activity_trend'],  # 既に-1.0～1.0
-        'collaboration_score': min(features['collaboration_score'], 1.0),
-        'code_quality_score': min(features['code_quality_score'], 1.0),
-        'recent_acceptance_rate': min(features['recent_acceptance_rate'], 1.0),
-        'review_load': min(features['review_load'], 1.0),
-        # 行動特徴量
-        'avg_action_intensity': min(features['avg_action_intensity'], 1.0),
-        'avg_collaboration': min(features['avg_collaboration'], 1.0),
-        'avg_response_time': min(features['avg_response_time'], 1.0),
-        'avg_review_size': min(features['avg_review_size'], 1.0),
+    # activity_trend は既に -1.0～1.0 なのでキャップ不要
+    return {
+        k: v if k == 'activity_trend' else min(v / _NORM_CAPS.get(k, 1.0), 1.0)
+        for k, v in features.items()
     }
-    return normalized
 
 
 def _calculate_activity_trend(dates: pd.Series) -> float:
@@ -235,13 +223,7 @@ def _calculate_activity_trend(dates: pd.Series) -> float:
 
     # 前半と後半で比較
     half_point = len(dates) // 2
-    recent_count = len(dates[half_point:])
-    old_count = len(dates[:half_point])
-
-    if old_count == 0:
-        return 1.0  # 後半のみ活動
-
-    ratio = recent_count / old_count
+    ratio = len(dates[half_point:]) / len(dates[:half_point])
 
     if ratio > 1.2:
         return 1.0  # 増加
@@ -270,16 +252,8 @@ def _calculate_collaboration_score(dev_data: pd.DataFrame) -> float:
         return 0.5  # デフォルト値
 
 
-def _get_default_features(normalize: bool = False) -> Dict[str, float]:
-    """
-    デフォルトの特徴量を返す（データがない場合）
-
-    Args:
-        normalize: 正規化するかどうか
-
-    Returns:
-        デフォルト特徴量辞書
-    """
+def _get_default_features() -> Dict[str, float]:
+    """デフォルトの特徴量を返す（データがない場合）"""
     features = {
         # 状態特徴量
         'experience_days': 0.0,
@@ -298,11 +272,7 @@ def _get_default_features(normalize: bool = False) -> Dict[str, float]:
         'avg_response_time': 0.5,
         'avg_review_size': 0.5,
     }
-
-    if normalize:
-        # 正規化済みなのでそのまま返す
-        return features
-
+    # デフォルト値は既に [0,1] 内なので normalize しても変わらない
     return features
 
 

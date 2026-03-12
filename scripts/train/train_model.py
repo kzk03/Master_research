@@ -104,7 +104,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.append(str(SRC))
 
-from review_predictor.model.irl_predictor import RetentionIRLSystem
+from review_predictor.IRL.model.irl_predictor import RetentionIRLSystem
 
 logging.basicConfig(
     level=logging.INFO,

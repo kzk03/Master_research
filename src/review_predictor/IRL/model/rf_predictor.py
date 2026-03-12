@@ -22,7 +22,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from review_predictor.features.common_features import (
+from review_predictor.IRL.features.common_features import (
     FEATURE_NAMES,
     extract_common_features,
 )
