@@ -1,84 +1,50 @@
 #!/usr/bin/env python3
 """
-データセット構築パイプライン
+データセット構築パイプライン（build_dataset.py）
 
-Gerrit REST APIからコードレビューデータを取得し、レビュー承諾予測のための
-特徴量付きCSVデータセットを生成します。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ このスクリプトの役割
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Gerrit（コードレビューシステム）の REST API からデータを取得し、
+機械学習に使える特徴量付き CSV を生成するパイプライン。
 
-主要な処理フロー:
-1. Gerrit APIから変更（Change）データを取得
-   - プロジェクト、日付範囲で絞り込み
-   - ページネーションで全件取得（500件ずつ）
-   - 詳細情報を含む（アカウント、ラベル、メッセージ、ファイル）
+    Gerrit API
+        ↓ GerritDataFetcher: 変更データを取得
+    生データ（JSON）
+        ↓ FeatureBuilder._extract_review_requests(): レビュー依頼を1行1件に展開
+        ↓ FeatureBuilder._compute_history_features(): 時系列特徴量を計算
+    特徴量付き DataFrame
+        ↓ カラム名リネーム（developer_email→email, request_time→timestamp）
+        ↓ collection_config.json に収集パラメータを記録
+    nova_raw.csv（出力）
 
-2. レビュー依頼の抽出
-   - 各変更に対するレビュアーを特定
-   - 明示的レビュアー（reviewersフィールド）
-   - 実際に応答したレビュアー（messagesから抽出）
-   - レビュー応答の有無を判定（14日以内）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 出力 CSV のカラム
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    email        : レビュアーのメール（downstream コードが参照するキー）
+    timestamp    : レビュー依頼時刻（downstream コードが参照するキー）
+    label        : 0（不承諾）/ 1（承諾）← 予測対象
+    change_id    : PR の ID
+    project      : プロジェクト名
+    owner_email  : PR 作成者のメール
+    ...（特徴量 66列）
 
-3. 特徴量の計算（約65種類）
-   a) 基本情報: change_id, project, owner_email, reviewer_email, request_time
-   b) ラベル: label (1=承諾, 0=拒否)
-   c) 履歴ベース特徴量:
-      - 過去30/90/180日のレビュー数
-      - レビュー負荷（7/30/180日）
-      - 過去の応答率（180日）
-      - オーナーの活動（30/90/180日）
-      - オーナーとレビュアーの過去のやりとり（180日）
-   d) パス類似度特徴量:
-      - Jaccard係数（グローバル/プロジェクト）
-      - Dice係数（グローバル/プロジェクト）
-      - Overlap係数（グローバル）
-      - Cosine類似度（グローバル）
-
-4. CSV出力
-   - 時系列順にソート
-   - 特徴量とラベルを含む完全なデータセット
-
-実装の特徴:
-- ボットアカウントの自動除外（zuul, jenkins, ci@など）
-- データリーク防止: 各レビュー依頼時点での履歴のみを使用
-- 時系列整合性: 過去のデータのみで特徴量を計算
-
-使用例:
-    # 基本的な使い方（単一プロジェクト）
-    uv run python scripts/pipeline/build_dataset.py \
-        --gerrit-url https://review.opendev.org \
-        --project openstack/nova \
-        --start-date 2020-01-01 \
-        --end-date 2024-01-01 \
-        --output data/nova_dataset.csv
-
-    # 複数プロジェクト
-    uv run python scripts/pipeline/build_dataset.py \
-        --gerrit-url https://review.opendev.org \
-        --project openstack/nova openstack/neutron \
-        --start-date 2020-01-01 \
-        --end-date 2024-01-01 \
-        --output data/openstack_dataset.csv
-
-出力CSVのフォーマット:
-    change_id, project, owner_email, reviewer_email, request_time,
-    label, response_latency_days, insertions, deletions, files_changed,
-    reviewer_past_reviews_30d, reviewer_past_reviews_90d, ...,
-    path_jaccard_files_global, path_dice_files_global, ...
 """
 
 import argparse
 import json
 import logging
 import sys
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import requests
 from tqdm import tqdm
 
 # ロギング設定
+# format: "時刻 - レベル - メッセージ" の形式でターミナルに出力される
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -86,666 +52,412 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║  クラス 1: GerritDataFetcher                                         ║
+# ╠══════════════════════════════════════════════════════════════════════╣
+# ║  Gerrit の REST API を叩いて変更データを取得するクラス。               ║
+# ║  HTTP 通信・ページネーション・XSSI除去 を担当する。                    ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
 class GerritDataFetcher:
     """
-    Gerrit REST APIからコードレビューデータを取得するクラス
+    Gerrit REST API からコードレビューデータを取得するクラス。
 
-    Gerrit APIの仕様:
-    - REST API: /changes/ エンドポイントを使用
-    - 認証: 公開プロジェクトは認証不要でアクセス可能
-    - ページネーション: _more_changes フラグで次ページの有無を判定
-    - XSSI保護: レスポンスの先頭に ")]}'" が付加される
-
-    実装の詳細:
-    - requests.Sessionを使用して接続を再利用（パフォーマンス向上）
-    - タイムアウトを設定してハングアップを防止
-    - エラーハンドリングでAPI障害に対応
+    ■ REST API の特徴
+    - エンドポイント: /changes/ で Change 一覧を取得できる
+    - ページネーション: 1回最大500件。_more_changes フラグで次ページ有無を判定
+    - XSSI 保護: レスポンスの先頭に ")]}'" が付く（XSS 攻撃防止のため）
+                 → JSONパース前にこのプレフィックスを取り除く必要がある
     """
 
     def __init__(self, gerrit_url: str, timeout: int = 300):
         """
-        GerritDataFetcherの初期化
-
         Args:
-            gerrit_url: GerritサーバーのベースURL
+            gerrit_url: Gerrit サーバーのベース URL
                         例: https://review.opendev.org
-            timeout: HTTPリクエストのタイムアウト（秒、デフォルト: 300）
-                     大規模プロジェクトでは長めに設定
+            timeout:    HTTP リクエストのタイムアウト（秒）
+                        5年分のデータ取得など長時間かかる場合は大きめに設定
         """
-        self.gerrit_url = gerrit_url.rstrip('/')  # 末尾のスラッシュを削除
+        self.gerrit_url = gerrit_url.rstrip('/')  # 末尾スラッシュを除去（URLの二重スラッシュ防止）
         self.timeout = timeout
-        self.session = requests.Session()  # 接続を再利用してパフォーマンス向上
+        # requests.Session: 同じサーバーへの接続を使い回す（毎回接続確立するよりも高速）
+        self.session = requests.Session()
 
     def _make_request(self, endpoint: str, params: Dict = None) -> Any:
         """
-        Gerrit API にHTTPリクエストを送信し、JSONレスポンスを取得
+        Gerrit API に HTTP GET リクエストを送り、JSON をパースして返す内部メソッド。
 
-        実装の詳細:
-        1. エンドポイントURLを構築
-        2. HTTP GETリクエストを送信
-        3. Gerrit特有のXSSI保護プレフィックス ")]}'" を除去
-        4. JSONをパースして返す
-
-        Gerrit APIの特徴:
-        - XSSI (Cross-Site Script Inclusion) 攻撃を防ぐため、
-          すべてのJSONレスポンスの先頭に ")]}'" が付加される
-        - このプレフィックスを除去しないとJSONパースに失敗する
+        ■ XSSI 保護プレフィックスの除去
+        Gerrit は XSS 攻撃（スクリプト注入）を防ぐために、
+        すべての JSON レスポンスの先頭に ")]}'" という文字列を付加している。
+        ブラウザはこのプレフィックスを含む文字列を JSON として実行できないため
+        攻撃が無効化される。
+        ただし API 利用側はこのプレフィックスを除去してからパースする必要がある。
 
         Args:
-            endpoint: APIエンドポイント（例: "changes/"）
-            params: クエリパラメータ（辞書形式）
-                    例: {"q": "project:nova", "n": 500}
+            endpoint: API のパス（例: "changes/"）
+            params:   クエリパラメータ（例: {"q": "project:nova", "n": 500}）
 
         Returns:
-            パースされたJSONレスポンス（辞書またはリスト）
+            パース済みの JSON（辞書またはリスト）
 
         Raises:
-            Exception: APIリクエストが失敗した場合（タイムアウト、HTTPエラーなど）
+            Exception: HTTP エラーやタイムアウト時
         """
-        # エンドポイントURLを構築（認証なしでアクセス）
         url = f"{self.gerrit_url}/{endpoint}"
 
         try:
-            # HTTP GETリクエストを送信
             response = self.session.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()  # HTTPエラーをチェック（4xx, 5xx）
+            response.raise_for_status()  # 4xx / 5xx なら例外を投げる
 
-            # レスポンスボディを取得
             content = response.text
 
-            # Gerrit特有のXSSI保護プレフィックスを除去
-            # レスポンスが ")]}'" で始まる場合、最初の4文字をスキップ
+            # XSSI 保護プレフィックス ")]}'" を除去
             if content.startswith(")]}'"):
                 content = content[4:]
 
-            # JSONをパースして返す
-            import json
             return json.loads(content)
 
         except Exception as e:
-            # エラーログを出力して例外を再スロー
             logger.error(f"API request failed: {url} - {e}")
             raise
-    
-    def fetch_changes(self, 
-                      project: str, 
-                      start_date: datetime, 
+
+    def fetch_changes(self,
+                      project: str,
+                      start_date: datetime,
                       end_date: datetime,
                       limit: int = 500) -> List[Dict[str, Any]]:
         """
-        変更（Change）データを取得
-        
+        指定プロジェクト・期間の全 Change データを取得する。
+
+        ■ ページネーションの仕組み
+        Gerrit API は 1 回のリクエストで最大 limit 件しか返さない。
+        レスポンスの最後の要素に "_more_changes: True" があれば次ページが存在する。
+        → start パラメータをずらしながら全件取得するまでループする。
+
+        ■ 取得オプション（"o" パラメータ）
+        - DETAILED_ACCOUNTS : レビュアー・オーナーの email 情報を含める
+        - DETAILED_LABELS   : +2/+1/0/-1/-2 などの投票情報を含める
+        - MESSAGES          : コメント履歴（誰がいつ何を書いたか）を含める
+        - CURRENT_REVISION  : 最新リビジョンの ID を含める
+        - CURRENT_FILES     : 変更されたファイルパス一覧を含める
+
         Args:
-            project: プロジェクト名
-            start_date: 開始日
-            end_date: 終了日
-            limit: 一度に取得する最大件数
-            
+            project:    プロジェクト名（例: "openstack/nova"）
+            start_date: 取得開始日
+            end_date:   取得終了日
+            limit:      1リクエストあたりの最大取得件数（Gerrit の上限は 500）
+
         Returns:
-            変更データのリスト
+            Change 辞書のリスト（1要素 = 1つの PR/Change）
         """
         all_changes = []
-        start = 0
-        
-        # 日付フォーマット
+        start = 0  # ページネーションのオフセット（何件目から取得するか）
+
         start_str = start_date.strftime("%Y-%m-%d")
-        end_str = end_date.strftime("%Y-%m-%d")
-        
+        end_str   = end_date.strftime("%Y-%m-%d")
+
+        # Gerrit のクエリ構文: project: + after: + before: で絞り込む
         query = f"project:{project} after:{start_str} before:{end_str}"
-        
+
         logger.info(f"Fetching changes for {project} from {start_str} to {end_str}")
-        
+
         while True:
             params = {
                 "q": query,
-                "o": ["DETAILED_ACCOUNTS", "DETAILED_LABELS", "MESSAGES", "CURRENT_REVISION", "CURRENT_FILES"],
-                "n": limit,
-                "start": start
+                # 取得する追加情報を指定（上記の説明参照）
+                "o": ["DETAILED_ACCOUNTS", "DETAILED_LABELS", "MESSAGES",
+                      "CURRENT_REVISION", "CURRENT_FILES",
+                      "REVIEWER_UPDATES", "ALL_REVISIONS",
+                      "CURRENT_COMMIT", "TRACKING_IDS",
+                      "ALL_FILES", "SUBMITTABLE", "SUBMIT_REQUIREMENTS"],
+                "n": limit,    # 1回の取得上限
+                "start": start # 取得開始位置（ページネーション用）
             }
-            
+
             try:
                 changes = self._make_request("changes/", params)
-                
+
                 if not changes:
-                    break
-                
+                    break  # 0件なら終了
+
                 all_changes.extend(changes)
                 logger.info(f"  Fetched {len(all_changes)} changes so far...")
-                
-                # _more_changesがFalseまたは存在しなければ終了
+
+                # 最後の要素に _more_changes がなければ全件取得完了
                 if not changes[-1].get("_more_changes", False):
                     break
-                
+
+                # 次のページへ（offset をずらす）
                 start += limit
-                
+
             except Exception as e:
                 logger.error(f"Error fetching changes: {e}")
                 break
-        
+
         logger.info(f"Total changes fetched: {len(all_changes)}")
         return all_changes
 
 
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║  クラス 2: FeatureBuilder                                            ║
+# ╠══════════════════════════════════════════════════════════════════════╣
+# ║  生データ（Change のリスト）から特徴量付き DataFrame を構築するクラス。  ║
+# ║                                                                      ║
+# ║  処理の流れ:                                                          ║
+# ║    build()                                                           ║
+# ║      ├─ _extract_review_requests()  Change → レビュー依頼に展開       ║
+# ║      └─ _compute_history_features() 時系列特徴量を計算               ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
 class FeatureBuilder:
-    """特徴量を構築するクラス"""
-    
-    def __init__(self, 
+    """特徴量付きデータセットを構築するクラス。"""
+
+    def __init__(self,
                  response_window_days: int = 14,
                  bot_patterns: List[str] = None):
         """
-        初期化
-        
         Args:
-            response_window_days: レビュー応答ウィンドウ（日）
-            bot_patterns: ボットと判定するメールパターン
+            response_window_days: レビュー承諾の判定ウィンドウ（日）
+                                  依頼から N 日以内に応答があれば label=1（承諾）
+                                  デフォルト 14 日（2週間）
+            bot_patterns:         ボットと判定するメールアドレスのパターンリスト
+                                  None のときは下記のデフォルトリストを使用
         """
         self.response_window_days = response_window_days
+
+        # ボット判定パターン: これらの文字列がメールに含まれていれば自動化アカウントとして除外
+        # CI/CD システム（Zuul, Jenkins）や自動化ボットはレビュアーとして意味がないため除外
         self.bot_patterns = bot_patterns or [
-            # 従来のパターン
             'zuul', 'jenkins', 'ci@', 'bot@', 'gerrit@',
             'noreply', 'openstack-infra', 'review@',
-            # Google service accounts
-            'gserviceaccount.com',
+            'gserviceaccount.com',      # Google サービスアカウント
             'appspot.gserviceaccount.com',
-            # LUCI automation
-            'luci-project-accounts',
+            'luci-project-accounts',    # LUCI（Chrome の CI）自動化
             'luci-bisection',
-            # Auto-rollers and automation
-            'autoroll',
-            'auto-roller',
-            'automerger',
-            'autosubmit',
-            'autorerun',
-            # Infrastructure and system accounts
-            'infra-',
-            'test-infra-',
-            '-infra@',
-            'system.gserviceaccount',
-            # Service accounts
-            'rubber-stamper',
-            'findit-for-me',
-            'tricium',
-            'chromeperf',
-            # Bot-related keywords
-            '-bot@',
-            '-robot',
-            'sheriffs-robots',
-            # Build and CI services
-            'android-build-',
-            'android-test-infra-',
-            'boq-android-',
-            # Other automation
-            'culprit-assistant',
-            'stale-change-watcher',
-            'presubmit-',
-            'workplan-finisher'
+            'autoroll', 'auto-roller', 'automerger', 'autosubmit', 'autorerun',
+            'infra-', 'test-infra-', '-infra@', 'system.gserviceaccount',
+            'rubber-stamper', 'findit-for-me', 'tricium', 'chromeperf',
+            '-bot@', '-robot', 'sheriffs-robots',
+            'android-build-', 'android-test-infra-', 'boq-android-',
+            'culprit-assistant', 'stale-change-watcher', 'presubmit-', 'workplan-finisher'
         ]
-        
-        # 各種履歴を保持
-        self.reviewer_history: Dict[str, List[Dict]] = defaultdict(list)
-        self.owner_history: Dict[str, List[Dict]] = defaultdict(list)
-        self.interaction_history: Dict[Tuple[str, str], List[Dict]] = defaultdict(list)
-        self.path_history: Dict[str, Set[str]] = defaultdict(set)
-        
+
     def _is_bot(self, email: str) -> bool:
-        """ボットかどうか判定"""
+        """
+        メールアドレスがボット（自動化アカウント）かどうかを判定する。
+
+        email が None や空文字の場合も True（ボット扱い）を返す。
+        → ボット・不明アカウントをすべて除外することで学習データの品質を保つ。
+
+        Args:
+            email: 判定するメールアドレス
+
+        Returns:
+            True ならボット（除外対象）、False なら人間
+        """
         if not email:
             return True
         email_lower = email.lower()
+        # any(): リストのどれか1つでも True なら True を返す
         return any(pattern in email_lower for pattern in self.bot_patterns)
-    
+
     def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:
-        """タイムスタンプをパース"""
+        """
+        Gerrit の日時文字列を Python の datetime オブジェクトに変換する。
+
+        ■ Gerrit の日時フォーマット
+        "2023-05-15 10:30:00.000000000" のように小数点以下の秒がある形式。
+        Python の fromisoformat() はナノ秒（.000000000）に対応していないため、
+        小数点以下を切り捨ててからパースする。
+
+        Args:
+            timestamp_str: Gerrit の日時文字列
+
+        Returns:
+            datetime オブジェクト。パース失敗時は None。
+        """
         if not timestamp_str:
             return None
         try:
-            # Gerritのタイムスタンプ形式
+            # 小数点以下（ナノ秒部分）を切り捨て
             if '.' in timestamp_str:
                 timestamp_str = timestamp_str.split('.')[0]
+            # 末尾の 'Z'（UTC を意味する）を除去して fromisoformat でパース
             return datetime.fromisoformat(timestamp_str.replace('Z', ''))
         except:
             return None
-    
+
     def _extract_review_requests(self, changes: List[Dict]) -> List[Dict]:
         """
-        変更データからレビュー依頼を抽出
-        
+        Change データから「レビュー依頼」レコードを抽出・展開する。
+
+        ■ なぜ展開が必要か
+        1つの Change（PR）に対して複数のレビュアーがいる場合、
+        「誰がそのレビューを承諾したか」を1行1レビュアーで表現する必要がある。
+
+        例:
+            Change #12345（owner: alice）
+              ├─ reviewer: bob   → 1行（bob が承諾したか？ label=1/0）
+              ├─ reviewer: carol → 1行（carol が承諾したか？ label=1/0）
+              └─ reviewer: dave  → 1行（dave が承諾したか？ label=1/0）
+
+        ■ ラベルの定義
+        request_time（依頼時刻）から response_window_days 日以内に
+        レビュアーがコメントまたは投票をしたら label=1（承諾）、
+        無応答なら label=0（拒否/無視）。
+
+        ■ レビュアーの特定方法
+        2種類のレビュアーを統合する:
+          1. 明示的レビュアー: Gerrit の "reviewers" フィールドに登録された人
+          2. 応答したレビュアー: "messages"（コメント履歴）に登場した人
+        → どちらにも該当する人は1件にまとめる（set の union を使用）
+
+        Args:
+            changes: GerritDataFetcher.fetch_changes() の出力
+
         Returns:
-            レビュー依頼のリスト（各レビュアーへの依頼）
+            レビュー依頼の辞書リスト（1要素 = 1レビュアーへの1依頼）
         """
         review_requests = []
-        
+
         for change in tqdm(changes, desc="Extracting review requests"):
-            change_id = change.get('id', '')
-            project = change.get('project', '')
+            change_id   = change.get('id', '')
+            project     = change.get('project', '')
             owner_email = change.get('owner', {}).get('email', '')
-            created = self._parse_timestamp(change.get('created', ''))
-            
+            created     = self._parse_timestamp(change.get('created', ''))
+
+            # オーナーが不明・ボット・日時不明な Change はスキップ
             if not created or not owner_email or self._is_bot(owner_email):
                 continue
-            
-            # ファイルパス情報
+
+            # ── ファイルパス情報の取得 ──────────────────────────────────
+            # Gerrit では revisions（リビジョン履歴）の中に files（変更ファイル）が入っている
+            # current_revision: 最新リビジョンのハッシュ（fetch 時に CURRENT_REVISION を指定した場合に存在）
             files = []
             current_rev = change.get('current_revision')
             if current_rev and 'revisions' in change:
                 rev_info = change.get('revisions', {}).get(current_rev, {})
-                files = list(rev_info.get('files', {}).keys())
-            
-            # 変更統計
-            insertions = change.get('insertions', 0)
-            deletions = change.get('deletions', 0)
-            
-            # メッセージからレビュアーと応答を抽出
+                files = list(rev_info.get('files', {}).keys())  # ファイルパスのリスト
+
+            insertions = change.get('insertions', 0)  # 追加行数
+            deletions  = change.get('deletions', 0)   # 削除行数
+
+            # ── メッセージからレビュアーの応答を抽出 ────────────────────
             messages = change.get('messages', [])
-            reviewers_responded = {}  # reviewer_email -> first_response_time
-            
+            # {reviewer_email: 最初の応答時刻} の辞書
+            reviewers_responded = {}
+
             for msg in messages:
-                author = msg.get('author', {})
-                author_email = author.get('email', '')
-                msg_date = self._parse_timestamp(msg.get('date', ''))
-                
+                author_email = msg.get('author', {}).get('email', '')
+                msg_date     = self._parse_timestamp(msg.get('date', ''))
+
                 if not msg_date or not author_email:
                     continue
-                
-                # オーナー以外のメッセージをレビュー応答として扱う
+
+                # オーナー以外の人間からのメッセージ = レビュー応答
                 if author_email != owner_email and not self._is_bot(author_email):
+                    # 最初の応答時刻のみ記録（すでに記録済みならスキップ）
                     if author_email not in reviewers_responded:
                         reviewers_responded[author_email] = msg_date
-            
-            # 明示的なレビュアー（reviewersフィールド）
+
+            # ── 明示的レビュアーの取得 ────────────────────────────────
             explicit_reviewers = set()
             for reviewer_info in change.get('reviewers', {}).get('REVIEWER', []):
                 reviewer_email = reviewer_info.get('email', '')
                 if reviewer_email and not self._is_bot(reviewer_email):
                     explicit_reviewers.add(reviewer_email)
-            
-            # 全レビュアー（明示的 + 応答した人）
+
+            # 明示的レビュアー + 応答したレビュアーを統合（重複なし）
             all_reviewers = explicit_reviewers | set(reviewers_responded.keys())
-            
+
+            # ── 各レビュアーのレコードを生成 ─────────────────────────
             for reviewer_email in all_reviewers:
                 if reviewer_email == owner_email:
-                    continue
-                
+                    continue  # 自分自身をレビューするケースは除外
+
                 first_response = reviewers_responded.get(reviewer_email)
-                responded = first_response is not None
-                
-                # 応答期限内かどうか
+                responded      = first_response is not None
+
                 if responded:
-                    response_days = (first_response - created).days
+                    response_days       = (first_response - created).days
                     responded_in_window = response_days <= self.response_window_days
                 else:
-                    response_days = None
+                    response_days       = None
                     responded_in_window = False
-                
+
                 review_request = {
-                    'change_id': change_id,
-                    'project': project,
-                    'project_id': project,  # マルチプロジェクト対応: project_idを追加
-                    'owner_email': owner_email,
-                    'reviewer_email': reviewer_email,
-                    'request_time': created.isoformat(),
-                    'developer_email': reviewer_email,
-                    'context_date': created.isoformat(),
-                    'responded_within_days': self.response_window_days,
-                    'label': 1 if responded_in_window else 0,
-                    'first_response_time': first_response.isoformat() if first_response else None,
+                    'change_id':            change_id,
+                    'project':              project,
+                    'owner_email':          owner_email,
+                    'reviewer_email':       reviewer_email,
+                    'request_time':         created.isoformat(),
+                    'label':                1 if responded_in_window else 0,  # 予測対象
+                    'first_response_time':  first_response.isoformat() if first_response else None,
                     'response_latency_days': response_days,
-                    'change_insertions': insertions,
-                    'change_deletions': deletions,
-                    'change_files_count': len(files),
-                    'files': files,
-                    'subject_len': len(change.get('subject', '')),
-                    'work_in_progress': change.get('work_in_progress', False),
+                    'change_insertions':    insertions,
+                    'change_deletions':     deletions,
+                    'change_files_count':   len(files),
                 }
-                
+
                 review_requests.append(review_request)
-        
+
         return review_requests
-    
-    def _compute_history_features(self,
-                                   requests: List[Dict],
-                                   changes: List[Dict]) -> pd.DataFrame:
-        """
-        履歴ベースの特徴量を計算
 
-        時間順に処理し、各依頼時点での履歴情報を使用（データリーク防止）
-        """
-        # 時間順にソート
-        requests_sorted = sorted(requests, key=lambda x: x['request_time'])
-
-        # 各開発者の初出現日を記録
-        first_seen: Dict[str, datetime] = {}
-
-        # マルチプロジェクト対応: 各開発者が活動したプロジェクトを追跡
-        developer_projects: Dict[str, Set[str]] = defaultdict(set)
-        
-        # 変更データを時間順にインデックス化
-        for change in changes:
-            created = self._parse_timestamp(change.get('created', ''))
-            owner = change.get('owner', {}).get('email', '')
-            project = change.get('project', '')
-
-            if created and owner and not self._is_bot(owner):
-                if owner not in first_seen or created < first_seen[owner]:
-                    first_seen[owner] = created
-
-                # マルチプロジェクト対応: オーナーのプロジェクト履歴を記録
-                developer_projects[owner].add(project)
-
-                # メッセージからレビュアーの初出現も記録
-                for msg in change.get('messages', []):
-                    author = msg.get('author', {}).get('email', '')
-                    msg_date = self._parse_timestamp(msg.get('date', ''))
-
-                    if author and msg_date and not self._is_bot(author):
-                        if author not in first_seen or msg_date < first_seen[author]:
-                            first_seen[author] = msg_date
-
-                        # マルチプロジェクト対応: レビュアーのプロジェクト履歴を記録
-                        developer_projects[author].add(project)
-        
-        # 履歴を時間順に構築
-        reviewer_reviews: Dict[str, List[Tuple[datetime, Dict]]] = defaultdict(list)
-        owner_messages: Dict[str, List[Tuple[datetime, Dict]]] = defaultdict(list)
-        interactions: Dict[Tuple[str, str], List[Tuple[datetime, Dict]]] = defaultdict(list)
-        reviewer_responses: Dict[str, List[Tuple[datetime, bool]]] = defaultdict(list)
-        reviewer_paths: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))  # reviewer -> project -> paths
-        
-        # 変更データから履歴を構築
-        for change in changes:
-            created = self._parse_timestamp(change.get('created', ''))
-            owner = change.get('owner', {}).get('email', '')
-            project = change.get('project', '')
-            
-            if not created or not owner:
-                continue
-            
-            # ファイルパス
-            files = []
-            current_rev = change.get('current_revision')
-            if current_rev and 'revisions' in change:
-                rev_info = change.get('revisions', {}).get(current_rev, {})
-                files = list(rev_info.get('files', {}).keys())
-            
-            for msg in change.get('messages', []):
-                author = msg.get('author', {}).get('email', '')
-                msg_date = self._parse_timestamp(msg.get('date', ''))
-                
-                if not author or not msg_date or self._is_bot(author):
-                    continue
-                
-                if author != owner:
-                    reviewer_reviews[author].append((msg_date, {'project': project}))
-                    interactions[(owner, author)].append((msg_date, {'project': project}))
-                    
-                    # パス履歴を更新
-                    for f in files:
-                        reviewer_paths[author]['global'].add(f)
-                        reviewer_paths[author][project].add(f)
-                else:
-                    owner_messages[author].append((msg_date, {'project': project}))
-        
-        # 特徴量を計算
-        features_list = []
-        
-        for req in tqdm(requests_sorted, desc="Computing features"):
-            context_date = self._parse_timestamp(req['request_time'])
-            reviewer = req['reviewer_email']
-            owner = req['owner_email']
-            project = req['project']
-            files = req.get('files', [])
-            
-            # 過去のレビュー数
-            past_reviews_30d = sum(1 for t, _ in reviewer_reviews[reviewer] 
-                                   if context_date - timedelta(days=30) <= t < context_date)
-            past_reviews_90d = sum(1 for t, _ in reviewer_reviews[reviewer] 
-                                   if context_date - timedelta(days=90) <= t < context_date)
-            past_reviews_180d = sum(1 for t, _ in reviewer_reviews[reviewer] 
-                                    if context_date - timedelta(days=180) <= t < context_date)
-            
-            # オーナーのメッセージ数
-            owner_msgs_30d = sum(1 for t, _ in owner_messages[owner] 
-                                 if context_date - timedelta(days=30) <= t < context_date)
-            owner_msgs_90d = sum(1 for t, _ in owner_messages[owner] 
-                                 if context_date - timedelta(days=90) <= t < context_date)
-            owner_msgs_180d = sum(1 for t, _ in owner_messages[owner] 
-                                  if context_date - timedelta(days=180) <= t < context_date)
-            
-            # インタラクション
-            pair_interactions = interactions[(owner, reviewer)]
-            interactions_180d = sum(1 for t, _ in pair_interactions 
-                                    if context_date - timedelta(days=180) <= t < context_date)
-            project_interactions_180d = sum(1 for t, d in pair_interactions 
-                                            if context_date - timedelta(days=180) <= t < context_date 
-                                            and d.get('project') == project)
-            
-            # アサインメント負荷（過去の依頼受け数を近似）
-            load_7d = sum(1 for t, _ in reviewer_reviews[reviewer] 
-                         if context_date - timedelta(days=7) <= t < context_date)
-            load_30d = sum(1 for t, _ in reviewer_reviews[reviewer] 
-                          if context_date - timedelta(days=30) <= t < context_date)
-            load_180d = past_reviews_180d
-            
-            # 応答率（過去180日）
-            responses_180d = [r for t, r in reviewer_responses[reviewer] 
-                              if context_date - timedelta(days=180) <= t < context_date]
-            response_rate = sum(responses_180d) / len(responses_180d) if responses_180d else 1.0
-            
-            # 在籍日数
-            reviewer_tenure = (context_date - first_seen.get(reviewer, context_date)).days if reviewer in first_seen else 0
-            owner_tenure = (context_date - first_seen.get(owner, context_date)).days if owner in first_seen else 0
-            
-            # 最終活動からの日数
-            reviewer_activities = [t for t, _ in reviewer_reviews[reviewer] if t < context_date]
-            if reviewer_activities:
-                days_since_last = (context_date - max(reviewer_activities)).days
-            else:
-                days_since_last = 10000  # 活動履歴なし
-            
-            # パス類似度計算
-            path_features = self._compute_path_similarity(
-                reviewer, project, files, reviewer_paths, context_date
-            )
-            
-            # マルチプロジェクト対応: is_cross_project フラグを計算
-            # この時点でのレビュアーのプロジェクト数が2以上ならクロスプロジェクト
-            reviewer_project_count = len(developer_projects.get(reviewer, set()))
-            is_cross_project = reviewer_project_count > 1
-
-            # 応答履歴を更新（この依頼の結果）
-            responded = req['label'] == 1
-            reviewer_responses[reviewer].append((context_date, responded))
-
-            features = {
-                **req,
-                'days_since_last_activity': days_since_last,
-                'reviewer_past_reviews_30d': past_reviews_30d,
-                'reviewer_past_reviews_90d': past_reviews_90d,
-                'reviewer_past_reviews_180d': past_reviews_180d,
-                'owner_past_messages_30d': owner_msgs_30d,
-                'owner_past_messages_90d': owner_msgs_90d,
-                'owner_past_messages_180d': owner_msgs_180d,
-                'owner_reviewer_past_interactions_180d': interactions_180d,
-                'owner_reviewer_project_interactions_180d': project_interactions_180d,
-                'owner_reviewer_past_assignments_180d': interactions_180d,  # 近似
-                'reviewer_assignment_load_7d': load_7d,
-                'reviewer_assignment_load_30d': load_30d,
-                'reviewer_assignment_load_180d': load_180d,
-                'reviewer_past_response_rate_180d': response_rate,
-                'reviewer_tenure_days': reviewer_tenure,
-                'owner_tenure_days': owner_tenure,
-                # マルチプロジェクト対応: 新しい特徴量
-                'is_cross_project': is_cross_project,
-                'reviewer_project_count': reviewer_project_count,
-                **path_features
-            }
-            
-            features_list.append(features)
-        
-        return pd.DataFrame(features_list)
-    
-    def _compute_path_similarity(self,
-                                  reviewer: str,
-                                  project: str,
-                                  files: List[str],
-                                  reviewer_paths: Dict,
-                                  context_date: datetime) -> Dict[str, float]:
-        """パス類似度特徴量を計算"""
-        
-        def jaccard(set1: Set[str], set2: Set[str]) -> float:
-            if not set1 or not set2:
-                return 0.0
-            return len(set1 & set2) / len(set1 | set2)
-        
-        def dice(set1: Set[str], set2: Set[str]) -> float:
-            if not set1 or not set2:
-                return 0.0
-            return 2 * len(set1 & set2) / (len(set1) + len(set2))
-        
-        def overlap_coeff(set1: Set[str], set2: Set[str]) -> float:
-            if not set1 or not set2:
-                return 0.0
-            return len(set1 & set2) / min(len(set1), len(set2))
-        
-        def cosine(set1: Set[str], set2: Set[str]) -> float:
-            if not set1 or not set2:
-                return 0.0
-            import math
-            return len(set1 & set2) / math.sqrt(len(set1) * len(set2))
-        
-        current_files = set(files)
-        current_dir1 = set(f.split('/')[0] if '/' in f else f for f in files)
-        current_dir2 = set('/'.join(f.split('/')[:2]) if f.count('/') >= 1 else f for f in files)
-        
-        # グローバルパス
-        global_files = reviewer_paths[reviewer].get('global', set())
-        global_dir1 = set(f.split('/')[0] if '/' in f else f for f in global_files)
-        global_dir2 = set('/'.join(f.split('/')[:2]) if f.count('/') >= 1 else f for f in global_files)
-        
-        # プロジェクトパス
-        proj_files = reviewer_paths[reviewer].get(project, set())
-        proj_dir1 = set(f.split('/')[0] if '/' in f else f for f in proj_files)
-        proj_dir2 = set('/'.join(f.split('/')[:2]) if f.count('/') >= 1 else f for f in proj_files)
-        
-        return {
-            'path_overlap_files_global': len(current_files & global_files),
-            'path_overlap_dir1_global': len(current_dir1 & global_dir1),
-            'path_overlap_dir2_global': len(current_dir2 & global_dir2),
-            'path_jaccard_files_global': jaccard(current_files, global_files),
-            'path_jaccard_dir1_global': jaccard(current_dir1, global_dir1),
-            'path_jaccard_dir2_global': jaccard(current_dir2, global_dir2),
-            'path_overlap_files_project': len(current_files & proj_files),
-            'path_overlap_dir1_project': len(current_dir1 & proj_dir1),
-            'path_overlap_dir2_project': len(current_dir2 & proj_dir2),
-            'path_jaccard_files_project': jaccard(current_files, proj_files),
-            'path_jaccard_dir1_project': jaccard(current_dir1, proj_dir1),
-            'path_jaccard_dir2_project': jaccard(current_dir2, proj_dir2),
-            'path_dice_files_global': dice(current_files, global_files),
-            'path_dice_dir1_global': dice(current_dir1, global_dir1),
-            'path_dice_dir2_global': dice(current_dir2, global_dir2),
-            'path_overlap_coeff_files_global': overlap_coeff(current_files, global_files),
-            'path_overlap_coeff_dir1_global': overlap_coeff(current_dir1, global_dir1),
-            'path_overlap_coeff_dir2_global': overlap_coeff(current_dir2, global_dir2),
-            'path_cosine_files_global': cosine(current_files, global_files),
-            'path_cosine_dir1_global': cosine(current_dir1, global_dir1),
-            'path_cosine_dir2_global': cosine(current_dir2, global_dir2),
-            'path_dice_files_project': dice(current_files, proj_files),
-            'path_dice_dir1_project': dice(current_dir1, proj_dir1),
-            'path_dice_dir2_project': dice(current_dir2, proj_dir2),
-            'path_overlap_coeff_files_project': overlap_coeff(current_files, proj_files),
-            'path_overlap_coeff_dir1_project': overlap_coeff(current_dir1, proj_dir1),
-            'path_overlap_coeff_dir2_project': overlap_coeff(current_dir2, proj_dir2),
-            'path_cosine_files_project': cosine(current_files, proj_files),
-            'path_cosine_dir1_project': cosine(current_dir1, proj_dir1),
-            'path_cosine_dir2_project': cosine(current_dir2, proj_dir2),
-        }
-    
     def build(self, changes: List[Dict]) -> pd.DataFrame:
         """
-        特徴量付きデータセットを構築
-        
+        全処理を統括して特徴量付き DataFrame を返すメインメソッド。
+
+        処理の流れ:
+            1. _extract_review_requests(): Change → レビュー依頼に1行展開
+            2. is_cross_project を付与（reviewer が複数 project に登場するか）
+            3. カラム順を整理して返す
+
+        時系列特徴量（past_reviews, load, tenure 等）は common_features.py で計算するため
+        このスクリプトでは生成しない。
+
         Args:
-            changes: 変更データのリスト
-            
+            changes: GerritDataFetcher.fetch_changes() の出力
+
         Returns:
-            特徴量付きDataFrame
+            特徴量付き DataFrame（main() で request_time→timestamp にリネーム後 CSV 保存）
         """
         logger.info("Extracting review requests...")
         requests = self._extract_review_requests(changes)
         logger.info(f"Extracted {len(requests)} review requests")
-        
-        logger.info("Computing history-based features...")
-        df = self._compute_history_features(requests, changes)
-        
-        # 不要なカラムを削除
-        if 'files' in df.columns:
-            df = df.drop(columns=['files'])
-        
-        # 抽出日を追加
+
+        df = pd.DataFrame(requests)
+
+        # is_cross_project: reviewer が複数のプロジェクトに登場するか
+        project_counts = df.groupby('reviewer_email')['project'].nunique()
+        df['is_cross_project'] = df['reviewer_email'].map(project_counts) > 1
+
+        # 抽出日を追加（いつ取得したデータかを記録）
         df['extraction_date'] = datetime.now().isoformat()
-        
-        # カラム順を整理
+
+        # カラム順を明示
         columns_order = [
             'change_id', 'project', 'owner_email', 'reviewer_email',
-            'request_time', 'developer_email', 'context_date',
-            'responded_within_days', 'label',
+            'request_time', 'label',
             'first_response_time', 'response_latency_days',
-            'first_vote_time', 'vote_latency_days',
-            'days_since_last_activity',
-            'reviewer_past_reviews_30d', 'reviewer_past_reviews_90d', 'reviewer_past_reviews_180d',
-            'owner_past_messages_30d', 'owner_past_messages_90d', 'owner_past_messages_180d',
-            'owner_reviewer_past_interactions_180d', 'owner_reviewer_project_interactions_180d',
-            'owner_reviewer_past_assignments_180d',
-            'reviewer_assignment_load_7d', 'reviewer_assignment_load_30d', 'reviewer_assignment_load_180d',
-            'reviewer_past_response_rate_180d',
-            'reviewer_tenure_days', 'owner_tenure_days',
             'change_insertions', 'change_deletions', 'change_files_count',
-            'work_in_progress', 'subject_len',
-            # マルチプロジェクト特徴量
-            'is_cross_project', 'reviewer_project_count',
+            'is_cross_project',
+            'extraction_date',
         ]
-        
-        # パス特徴量カラム
-        path_columns = [c for c in df.columns if c.startswith('path_')]
-        columns_order.extend(sorted(path_columns))
-        columns_order.append('extraction_date')
-        
-        # 存在するカラムのみ選択
-        existing_columns = [c for c in columns_order if c in df.columns]
-        df = df[existing_columns]
-        
-        # 欠損カラムを追加（0で埋める）
-        for col in columns_order:
-            if col not in df.columns:
-                df[col] = 0 if col not in ['first_response_time', 'first_vote_time', 'vote_latency_days'] else None
-        
+        df = df[columns_order]
+
         return df
 
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║  main(): コマンドライン引数を受け取り全体を実行するエントリーポイント    ║
+# ╚══════════════════════════════════════════════════════════════════════╝
 
 def main():
     parser = argparse.ArgumentParser(
         description='Gerritからデータを取得し、特徴量付きCSVを生成',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用例:
-    # OpenStack Novaプロジェクト
-    uv run python scripts/pipeline/build_dataset.py \\
-        --gerrit-url https://review.opendev.org \\
-        --project openstack/nova \\
-        --start-date 2020-01-01 \\
-        --end-date 2024-01-01 \\
-        --output data/nova_dataset.csv
-        
-    # 複数プロジェクト
-    uv run python scripts/pipeline/build_dataset.py \\
-        --gerrit-url https://review.opendev.org \\
-        --project openstack/nova openstack/neutron \\
-        --start-date 2020-01-01 \\
-        --end-date 2024-01-01 \\
-        --output data/openstack_multi.csv
-        """
     )
-    
+
     parser.add_argument('--gerrit-url', required=True,
                         help='GerritサーバーのURL (例: https://review.opendev.org)')
     parser.add_argument('--project', nargs='+', required=True,
@@ -762,26 +474,25 @@ def main():
                         help='整形前の生データ(JSON)を保存するパス。未指定なら保存しない')
     parser.add_argument('--raw-output-dir', required=False, default=None,
                         help='プロジェクトごとに生データ(JSON)を保存するディレクトリ。未指定なら保存しない')
-    
+
     args = parser.parse_args()
-    
-    # 日付パース
+
     start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
-    end_date = datetime.strptime(args.end_date, '%Y-%m-%d')
-    
+    end_date   = datetime.strptime(args.end_date,   '%Y-%m-%d')
+
     logger.info("=" * 60)
     logger.info("データセット構築パイプライン")
     logger.info("=" * 60)
     logger.info(f"Gerrit URL: {args.gerrit_url}")
-    logger.info(f"Projects: {args.project}")
-    logger.info(f"Period: {args.start_date} to {args.end_date}")
+    logger.info(f"Projects:   {args.project}")
+    logger.info(f"Period:     {args.start_date} to {args.end_date}")
     logger.info(f"Response window: {args.response_window} days")
-    logger.info(f"Output: {args.output}")
+    logger.info(f"Output:     {args.output}")
     logger.info("=" * 60)
-    
-    # データ取得
+
+    # ── Step 1: Gerrit API からデータ取得 ───────────────────────────
     fetcher = GerritDataFetcher(args.gerrit_url)
-    
+
     all_changes = []
     project_changes: Dict[str, List[Dict[str, Any]]] = {}
     for project in args.project:
@@ -789,14 +500,15 @@ def main():
         changes = fetcher.fetch_changes(project, start_date, end_date)
         all_changes.extend(changes)
         project_changes[project] = changes
-    
+
     logger.info(f"\nTotal changes: {len(all_changes)}")
-    
+
     if not all_changes:
         logger.error("No changes found. Please check the project name and date range.")
         sys.exit(1)
 
-    # 生データの保存（オプション）
+    # ── Step 2（オプション）: 生データを JSON で保存 ─────────────────
+    # 生データを残しておくと、特徴量の再計算やデバッグが容易になる
     if args.raw_output:
         raw_path = Path(args.raw_output)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
@@ -813,25 +525,51 @@ def main():
                 logger.info(f"  {proj}: 0件のためスキップ")
                 continue
             safe_name = proj.replace('/', '__')
-            out_path = raw_dir / f"{safe_name}.json"
+            out_path  = raw_dir / f"{safe_name}.json"
             logger.info(f"  {proj}: {out_path} に保存 ({len(changes)}件)")
             with out_path.open('w', encoding='utf-8') as f:
                 json.dump(changes, f, ensure_ascii=False)
-    
-    # 特徴量構築
+
+    # ── Step 3: 特徴量を構築 ────────────────────────────────────────
     builder = FeatureBuilder(response_window_days=args.response_window)
     df = builder.build(all_changes)
-    
+
+    # ── Step 4: カラム名を統一 ───────────────────────────────────────
+    # downstream のコード（common_features.py 等）は 'email' と 'timestamp' を前提とする
+    df = df.rename(columns={
+        'reviewer_email': 'email',      # レビュアーのメール
+        'request_time':   'timestamp',  # レビュー依頼時刻
+    })
+
     logger.info(f"\nDataset shape: {df.shape}")
     logger.info(f"Positive labels: {(df['label'] == 1).sum()} ({(df['label'] == 1).mean()*100:.1f}%)")
     logger.info(f"Negative labels: {(df['label'] == 0).sum()} ({(df['label'] == 0).mean()*100:.1f}%)")
-    
-    # 保存
+
+    # ── Step 5: CSV を保存 ───────────────────────────────────────────
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)
-    
     logger.info(f"\nDataset saved to: {output_path}")
+
+    # ── Step 6: 収集パラメータを JSON に記録（再現性のため） ────────────
+    # このファイルを見れば同じデータを再取得できる
+    config_path = output_path.with_name('collection_config.json')
+    collection_config = {
+        "gerrit_url":      args.gerrit_url,
+        "projects":        args.project,
+        "start_date":      args.start_date,
+        "end_date":        args.end_date,
+        "response_window": args.response_window,
+        "output":          str(output_path),
+        "n_rows":          len(df),
+        "n_positive":      int((df['label'] == 1).sum()),
+        "n_negative":      int((df['label'] == 0).sum()),
+        "collected_at":    datetime.now().isoformat(),
+    }
+    with config_path.open('w', encoding='utf-8') as f:
+        json.dump(collection_config, f, ensure_ascii=False, indent=2)
+    logger.info(f"Collection config saved to: {config_path}")
+
     logger.info("=" * 60)
     logger.info("完了！")
     logger.info("=" * 60)

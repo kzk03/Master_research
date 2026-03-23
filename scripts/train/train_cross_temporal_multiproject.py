@@ -2,30 +2,23 @@
 """
 複数プロジェクト対応のクロス時間評価スクリプト
 
-既存のresults/review_continuation_cross_eval_nova/と同じ期間設定:
-- 訓練期間: 2021-01-01 ～ 2022-01-01（12ヶ月、4期間 × 3ヶ月）
-- 評価期間: 2023-01-01 ～ 2024-01-01（12ヶ月、4期間 × 3ヶ月）
+卒論と同じ設計:
+- IRL訓練: train_history_start ～ train_history_end（固定、デフォルト2021-01-01～2022-01-01）
+  - 特徴量はこの全期間から計算
+  - ラベルは train_history_end 時点から将来窓（train_X-Xm）で定義
+- 評価: eval_cutoff（固定、デフォルト2023-01-01）時点でスナップショット
+  - 特徴量は eval_cutoff から eval_history_months 分遡って計算
+  - ラベルは eval_cutoff 時点から将来窓（eval_X-Xm）で定義
 
-訓練期間<=評価期間の制約で、3ヶ月間隔の全10パターンを評価:
-- 0-3m → 0-3m, 3-6m, 6-9m, 9-12m (4パターン)
-- 3-6m → 3-6m, 6-9m, 9-12m (3パターン)
-- 6-9m → 6-9m, 9-12m (2パターン)
-- 9-12m → 9-12m (1パターン)
+全16パターン（制約なし、4×4）:
+- train_0-3m  → eval_0-3m, 3-6m, 6-9m, 9-12m
+- train_3-6m  → eval_0-3m, 3-6m, 6-9m, 9-12m
+- train_6-9m  → eval_0-3m, 3-6m, 6-9m, 9-12m
+- train_9-12m → eval_0-3m, 3-6m, 6-9m, 9-12m
 
-合計: 10パターン
-
-実際の日付:
-訓練期間（2021-01-01起点）:
-  0-3m:  2021-01-01 ～ 2021-04-01
-  3-6m:  2021-04-01 ～ 2021-07-01
-  6-9m:  2021-07-01 ～ 2021-10-01
-  9-12m: 2021-10-01 ～ 2022-01-01
-
-評価期間（2023-01-01起点）:
-  0-3m:  2023-01-01 ～ 2023-04-01
-  3-6m:  2023-04-01 ～ 2023-07-01
-  6-9m:  2023-07-01 ～ 2023-10-01
-  9-12m: 2023-10-01 ～ 2024-01-01
+意味:
+  train_X-Xm: IRLの報酬関数学習に使うラベルの将来窓（train_history_end 時点からX～Xヶ月後）
+  eval_X-Xm:  予測評価時の将来窓（eval_cutoff 時点からX～Xヶ月後）
 """
 
 import argparse
@@ -59,61 +52,42 @@ def get_date_offset(base_date: pd.Timestamp, months: int) -> pd.Timestamp:
 
 
 def generate_evaluation_patterns(
-    train_base_start: pd.Timestamp,
-    eval_base_start: pd.Timestamp,
     total_months: int = 12
 ) -> List[Dict]:
     """
-    評価パターンを生成（訓練期間<=評価期間の制約）
+    評価パターンを生成（train_fw_start <= eval_fw_start の制約で10パターン）
+
+    train_X-Xm: IRLラベル将来窓のオフセット（train_history_end 基点）
+    eval_X-Xm:  評価ラベル将来窓のオフセット（eval_cutoff 基点）
 
     Args:
-        train_base_start: 訓練期間のベース開始日（例: 2021-01-01）
-        eval_base_start: 評価期間のベース開始日（例: 2023-01-01）
         total_months: 総期間（月数、デフォルト12ヶ月）
 
     Returns:
-        評価パターンのリスト
+        評価パターンのリスト（将来窓オフセット月数を含む）
     """
     patterns = []
 
-    # 訓練期間を定義（3ヶ月間隔）
-    train_periods = []
+    # 3ヶ月間隔の将来窓を定義
+    windows = []
     for i in range(0, total_months, 3):
-        start = get_date_offset(train_base_start, i)
-        end = get_date_offset(train_base_start, i + 3)
-        train_periods.append({
+        windows.append({
             'name': f'{i}-{i+3}m',
-            'start': start,
-            'end': end,
-            'start_month': i,
-            'end_month': i + 3
+            'fw_start': i,
+            'fw_end': i + 3,
         })
 
-    # 評価期間を定義（3ヶ月間隔）
-    eval_periods = []
-    for i in range(0, total_months, 3):
-        start = get_date_offset(eval_base_start, i)
-        end = get_date_offset(eval_base_start, i + 3)
-        eval_periods.append({
-            'name': f'{i}-{i+3}m',
-            'start': start,
-            'end': end,
-            'start_month': i,
-            'end_month': i + 3
-        })
-
-    # 訓練期間 <= 評価期間の制約でパターンを生成
-    for i, train_period in enumerate(train_periods):
-        for j, eval_period in enumerate(eval_periods):
-            # 制約: 訓練期間の開始 <= 評価期間の開始
-            if train_period['start_month'] <= eval_period['start_month']:
+    # train_fw_start <= eval_fw_start の制約: 10パターン
+    for train_w in windows:
+        for eval_w in windows:
+            if train_w['fw_start'] <= eval_w['fw_start']:
                 patterns.append({
-                    'train_name': train_period['name'],
-                    'eval_name': eval_period['name'],
-                    'train_start': train_period['start'],
-                    'train_end': train_period['end'],
-                    'eval_start': eval_period['start'],
-                    'eval_end': eval_period['end']
+                    'train_name': train_w['name'],
+                    'eval_name': eval_w['name'],
+                    'train_fw_start': train_w['fw_start'],
+                    'train_fw_end': train_w['fw_end'],
+                    'eval_fw_start': eval_w['fw_start'],
+                    'eval_fw_end': eval_w['fw_end'],
                 })
 
     logger.info(f"生成されたパターン数: {len(patterns)}")
@@ -121,6 +95,62 @@ def generate_evaluation_patterns(
         logger.info(f"  {p['train_name']} → {p['eval_name']}")
 
     return patterns
+
+
+def _extract_monthly_rf_train_features(
+    df_rf: pd.DataFrame,
+    train_history_start: pd.Timestamp,
+    train_history_end: pd.Timestamp,
+    future_window_start_months: int,
+    future_window_end_months: int,
+    project_type: str = "nova",
+) -> pd.DataFrame:
+    """月次スナップショットを積み上げたRF訓練データを生成（卒論設計準拠）。
+
+    IRL訓練と同様に、各月末を基点として特徴量とラベルを計算し、
+    全月分を結合してRFの訓練データとする。これによりRFの訓練ラベルが
+    train_history_end以前の期間に散在し、評価ラベルと分離される。
+
+    Args:
+        df_rf: RF用DataFrame (email/timestamp/label列を持つ)
+        train_history_start: 特徴量計算の開始日（固定）
+        train_history_end: 訓練期間の終端（この月まで月次で繰り返す）
+        future_window_start_months: 将来窓の開始オフセット（ヶ月）
+        future_window_end_months: 将来窓の終了オフセット（ヶ月）
+        project_type: プロジェクト種別（未使用、API互換のため保持）
+
+    Returns:
+        全月分を結合したDataFrame（feature列 + label + email）
+    """
+    monthly_dfs = []
+    month_starts = pd.date_range(start=train_history_start, end=train_history_end, freq='MS')
+
+    for month_start in month_starts[:-1]:  # 最終月を除く（将来窓がtrain_history_endを超えないように）
+        month_end = month_start + pd.DateOffset(months=1)
+        future_start = month_end + pd.DateOffset(months=future_window_start_months)
+        future_end = month_end + pd.DateOffset(months=future_window_end_months)
+
+        # 将来窓がtrain_history_endを超えないようにクリップ（データリーク防止）
+        if future_start >= train_history_end:
+            continue
+        if future_end > train_history_end:
+            future_end = train_history_end
+
+        from review_predictor.IRL.model.rf_predictor import extract_features_for_window
+        month_df = extract_features_for_window(
+            df_rf,
+            train_history_start,  # 特徴量は常に先頭から累積
+            month_end,
+            future_start,
+            future_end,
+            project_type,
+        )
+        if len(month_df) > 0:
+            monthly_dfs.append(month_df)
+
+    if not monthly_dfs:
+        return pd.DataFrame()
+    return pd.concat(monthly_dfs, ignore_index=True)
 
 
 def _prepare_rf_dataframe(df_src: pd.DataFrame, project_name: str = None) -> pd.DataFrame:
@@ -157,6 +187,10 @@ def train_and_evaluate_pattern(
     pattern: Dict,
     reviews_csv: str,
     output_base: Path,
+    train_history_start: pd.Timestamp,
+    train_history_end: pd.Timestamp,
+    eval_cutoff: pd.Timestamp,
+    eval_history_months: int = 24,
     project: str = None,
     epochs: int = 20,
     min_history: int = 0,
@@ -166,15 +200,20 @@ def train_and_evaluate_pattern(
     focal_alpha: float = None,
     focal_gamma: float = None,
     negative_oversample_factor: int = 1,
-    run_rf_baseline: bool = False
+    run_rf_baseline: bool = False,
+    hidden_dim: int = 128
 ) -> Dict:
     """
     1つのパターンで訓練・評価を実行
 
     Args:
-        pattern: 評価パターン
+        pattern: 評価パターン（train_fw_start/end, eval_fw_start/end を含む）
         reviews_csv: レビュー依頼CSVファイル
         output_base: 出力ベースディレクトリ
+        train_history_start: IRL訓練の特徴量計算開始日（固定）
+        train_history_end: IRL訓練の特徴量計算終了日（固定）= ラベル計算の基点
+        eval_cutoff: 評価スナップショット日（固定）= ラベル計算の基点
+        eval_history_months: 評価用履歴ウィンドウ（ヶ月）
         project: プロジェクト名（Noneの場合は全プロジェクト）
         epochs: 訓練エポック数
         min_history: 最小履歴イベント数
@@ -193,8 +232,8 @@ def train_and_evaluate_pattern(
 
     logger.info("=" * 80)
     logger.info(f"パターン: {train_name} → {eval_name}")
-    logger.info(f"訓練期間: {pattern['train_start']} ～ {pattern['train_end']}")
-    logger.info(f"評価期間: {pattern['eval_start']} ～ {pattern['eval_end']}")
+    logger.info(f"IRL訓練ラベル将来窓: {pattern['train_fw_start']}～{pattern['train_fw_end']}ヶ月")
+    logger.info(f"評価ラベル将来窓: {pattern['eval_fw_start']}～{pattern['eval_fw_end']}ヶ月")
     logger.info("=" * 80)
 
     # train_model.pyから関数をインポート
@@ -227,27 +266,26 @@ def train_and_evaluate_pattern(
         load_review_requests,
     )
 
-    from review_predictor.IRL.model.irl_predictor import RetentionIRLSystem
+    from review_predictor.IRL.model.irl_predictor_v2 import RetentionIRLSystem
+    from review_predictor.IRL.features.common_features import STATE_FEATURES, ACTION_FEATURES
 
     # データ読み込み
     df = load_review_requests(reviews_csv)
 
-    # 訓練期間のラベル計算（評価期間を将来窓として使用）
-    future_window_start_months = 0
-    # 訓練終了から評価開始までの月数を計算
-    months_to_eval = int((pattern['eval_start'] - pattern['train_end']).days / 30)
-    future_window_end_months = months_to_eval + 3  # 評価期間の長さ（3ヶ月）
+    logger.info(f"IRL訓練履歴期間: {train_history_start} ～ {train_history_end}")
+    logger.info(f"IRL訓練ラベル将来窓: {pattern['train_fw_start']}～{pattern['train_fw_end']}ヶ月 (train_history_end 基点)")
+    logger.info(f"評価スナップショット日: {eval_cutoff}")
+    logger.info(f"評価履歴ウィンドウ: {eval_history_months}ヶ月")
+    logger.info(f"評価ラベル将来窓: {pattern['eval_fw_start']}～{pattern['eval_fw_end']}ヶ月 (eval_cutoff 基点)")
 
-    logger.info(f"将来窓設定: {future_window_start_months}～{future_window_end_months}ヶ月")
-
-    # 訓練用軌跡を抽出
+    # 訓練用軌跡を抽出（固定の履歴期間、パターンに応じた将来窓）
     logger.info("訓練用軌跡を抽出...")
     train_trajectories = extract_review_acceptance_trajectories(
         df,
-        train_start=pattern['train_start'],
-        train_end=pattern['train_end'],
-        future_window_start_months=future_window_start_months,
-        future_window_end_months=future_window_end_months,
+        train_start=train_history_start,
+        train_end=train_history_end,
+        future_window_start_months=pattern['train_fw_start'],
+        future_window_end_months=pattern['train_fw_end'],
         min_history_requests=min_history,
         project=project,
         negative_oversample_factor=negative_oversample_factor
@@ -260,9 +298,9 @@ def train_and_evaluate_pattern(
     # IRLシステムを初期化（マルチプロジェクト対応）
     # data/multiproject_paper_data.csv を使用する場合は14次元
     config = {
-        'state_dim': 14,  # マルチプロジェクト対応: 14次元（プロジェクト特徴量4つ追加）
-        'action_dim': 5,  # マルチプロジェクト対応: 5次元（is_cross_project追加）
-        'hidden_dim': 128,
+        'state_dim': len(STATE_FEATURES),  # common_featuresから動的取得
+        'action_dim': len(ACTION_FEATURES),
+        'hidden_dim': hidden_dim,
         'sequence': True,
         'seq_len': 0,
         'learning_rate': learning_rate,
@@ -294,11 +332,13 @@ def train_and_evaluate_pattern(
 
     for traj in train_trajectories:
         developer = traj.get('developer', traj.get('developer_info', {}))
-        # 時系列予測を使用（スナップショット予測から変更）
-        result = irl_system.predict_continuation_probability(
+        # 月次シーケンスで予測（卒論設計準拠）
+        result = irl_system.predict_continuation_probability_monthly(
             developer,
-            traj['activity_history'],
-            traj['context_date']
+            traj.get('monthly_activity_histories', []),
+            traj.get('step_context_dates', []),
+            traj.get('context_date'),
+            step_total_project_reviews=traj.get('step_total_project_reviews'),
         )
         train_y_true.append(1 if traj['future_acceptance'] else 0)
         train_y_pred.append(result['continuation_probability'])
@@ -330,16 +370,14 @@ def train_and_evaluate_pattern(
         json.dump(train_optimal_threshold_info, f, indent=2)
     logger.info(f"最適閾値を保存: {threshold_path}")
 
-    # 評価用軌跡を抽出
+    # 評価用軌跡を抽出（固定のcutoff日、eval_history_months分の履歴、パターンに応じた将来窓）
     logger.info("評価用軌跡を抽出...")
-    history_window_months = int((pattern['train_end'] - pattern['train_start']).days / 30)
-
     eval_trajectories = extract_evaluation_trajectories(
         df,
-        cutoff_date=pattern['train_end'],
-        history_window_months=history_window_months,
-        future_window_start_months=months_to_eval,
-        future_window_end_months=future_window_end_months,
+        cutoff_date=eval_cutoff,
+        history_window_months=eval_history_months,
+        future_window_start_months=pattern['eval_fw_start'],
+        future_window_end_months=pattern['eval_fw_end'],
         min_history_requests=min_history,
         project=project
     )
@@ -355,11 +393,13 @@ def train_and_evaluate_pattern(
     predictions = []
 
     for traj in eval_trajectories:
-        # 時系列予測を使用（スナップショット予測から変更）
-        result = irl_system.predict_continuation_probability(
+        # 月次シーケンスで予測（卒論設計準拠）
+        result = irl_system.predict_continuation_probability_monthly(
             traj['developer'],
-            traj['activity_history'],
-            traj['context_date']
+            traj.get('monthly_activity_histories', []),
+            traj.get('step_context_dates', []),
+            traj.get('context_date'),
+            step_total_project_reviews=traj.get('step_total_project_reviews'),
         )
         prob = result['continuation_probability']
         true_label = 1 if traj['future_acceptance'] else 0
@@ -438,20 +478,24 @@ def train_and_evaluate_pattern(
             df_rf = _prepare_rf_dataframe(df, project)
             project_type = 'nova' if project else 'multi'
 
-            train_features_df = extract_features_for_window(
+            # RF訓練: 月次スナップショットを積み上げ（IRL訓練と同設計）
+            train_features_df = _extract_monthly_rf_train_features(
                 df_rf,
-                pattern['train_start'],
-                pattern['train_end'],
-                pattern['train_start'],
-                pattern['train_end'],
-                project_type
+                train_history_start,
+                train_history_end,
+                pattern['train_fw_start'],
+                pattern['train_fw_end'],
+                project_type,
             )
+            # RF評価: eval_cutoff を基点、eval_history_months 分遡って特徴量計算
+            eval_history_start = eval_cutoff - pd.DateOffset(months=eval_history_months)
+            eval_fw_end_date = eval_cutoff + pd.DateOffset(months=pattern['eval_fw_end'])
             eval_features_df = extract_features_for_window(
                 df_rf,
-                pattern['train_start'],
-                pattern['train_end'],
-                pattern['eval_start'],
-                pattern['eval_end'],
+                eval_history_start,
+                eval_cutoff,
+                eval_cutoff,
+                eval_fw_end_date,
                 project_type
             )
 
@@ -586,22 +630,34 @@ def main():
         help="レビュー依頼CSVファイルのパス"
     )
     parser.add_argument(
-        "--train-base-start",
+        "--train-history-start",
         type=str,
         default="2021-01-01",
-        help="訓練期間のベース開始日 (YYYY-MM-DD、デフォルト: 2021-01-01)"
+        help="IRL訓練の特徴量計算開始日 (YYYY-MM-DD、デフォルト: 2021-01-01)"
     )
     parser.add_argument(
-        "--eval-base-start",
+        "--train-history-end",
         type=str,
         default="2023-01-01",
-        help="評価期間のベース開始日 (YYYY-MM-DD、デフォルト: 2023-01-01)"
+        help="IRL訓練の特徴量計算終了日＝ラベル基点 (YYYY-MM-DD、デフォルト: 2023-01-01)"
+    )
+    parser.add_argument(
+        "--eval-cutoff",
+        type=str,
+        default="2023-01-01",
+        help="評価スナップショット日＝ラベル基点 (YYYY-MM-DD、デフォルト: 2023-01-01)"
+    )
+    parser.add_argument(
+        "--eval-history-months",
+        type=int,
+        default=24,
+        help="評価用履歴ウィンドウ（ヶ月、デフォルト: 24）"
     )
     parser.add_argument(
         "--total-months",
         type=int,
         default=12,
-        help="総期間（月数、デフォルト12ヶ月）"
+        help="将来窓の総期間（月数、デフォルト12ヶ月）"
     )
     parser.add_argument(
         "--output",
@@ -618,7 +674,7 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=20,
+        default=200,
         help="訓練エポック数"
     )
     parser.add_argument(
@@ -637,14 +693,14 @@ def main():
     parser.add_argument(
         "--focal-alpha",
         type=float,
-        default=None,
-        help="Focal Loss alpha (指定時は自動調整を上書き)"
+        default=0.65,
+        help="Focal Loss alpha (デフォルト: 0.65)"
     )
     parser.add_argument(
         "--focal-gamma",
         type=float,
-        default=None,
-        help="Focal Loss gamma (指定時は自動調整を上書き)"
+        default=1.5,
+        help="Focal Loss gamma (デフォルト: 1.5)"
     )
     parser.add_argument(
         "--min-history-events",
@@ -655,36 +711,62 @@ def main():
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=0.0001,
-        help="学習率 (デフォルト: 1e-4)"
+        default=0.001,
+        help="学習率 (デフォルト: 1e-3)"
     )
     parser.add_argument(
         "--negative-oversample-factor",
         type=int,
-        default=1,
+        default=2,
         help="負例オーバーサンプリング係数（>1で訓練時に負例を複製）"
+    )
+    parser.add_argument(
+        "--hidden-dim",
+        type=int,
+        default=128,
+        help="LSTMの隠れ層次元数（デフォルト: 128）"
     )
     parser.add_argument(
         "--run-rf",
         action="store_true",
         help="RFベースラインも同じパターンで評価する"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="乱数シード（安定化用、未指定時はランダム）"
+    )
 
     args = parser.parse_args()
+
+    # 乱数シード固定（安定化）
+    if args.seed is not None:
+        import random
+        import numpy as np
+        import torch as _torch
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        _torch.manual_seed(args.seed)
+        if _torch.cuda.is_available():
+            _torch.cuda.manual_seed_all(args.seed)
+        logger.info(f"乱数シードを固定: {args.seed}")
 
     # 出力ディレクトリを作成
     output_base = Path(args.output)
     output_base.mkdir(parents=True, exist_ok=True)
 
-    # ベース開始日をパース
-    train_base_start = pd.Timestamp(args.train_base_start)
-    eval_base_start = pd.Timestamp(args.eval_base_start)
+    # 日付をパース
+    train_history_start = pd.Timestamp(args.train_history_start)
+    train_history_end = pd.Timestamp(args.train_history_end)
+    eval_cutoff = pd.Timestamp(args.eval_cutoff)
 
-    logger.info(f"訓練期間ベース: {train_base_start}")
-    logger.info(f"評価期間ベース: {eval_base_start}")
+    logger.info(f"IRL訓練履歴期間: {train_history_start} ～ {train_history_end}")
+    logger.info(f"評価スナップショット日: {eval_cutoff}")
+    logger.info(f"評価履歴ウィンドウ: {args.eval_history_months}ヶ月")
 
-    # 評価パターンを生成
-    patterns = generate_evaluation_patterns(train_base_start, eval_base_start, args.total_months)
+    # 評価パターンを生成（16パターン）
+    patterns = generate_evaluation_patterns(args.total_months)
 
     # 各パターンで訓練・評価
     logger.info("=" * 80)
@@ -698,6 +780,10 @@ def main():
             pattern,
             args.reviews,
             output_base,
+            train_history_start=train_history_start,
+            train_history_end=train_history_end,
+            eval_cutoff=eval_cutoff,
+            eval_history_months=args.eval_history_months,
             project=args.project,
             epochs=args.epochs,
             min_history=args.min_history_events,
@@ -707,7 +793,8 @@ def main():
             focal_alpha=args.focal_alpha,
             focal_gamma=args.focal_gamma,
             negative_oversample_factor=args.negative_oversample_factor,
-            run_rf_baseline=args.run_rf
+            run_rf_baseline=args.run_rf,
+            hidden_dim=args.hidden_dim
         )
 
         if metrics is None:

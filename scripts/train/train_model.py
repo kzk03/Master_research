@@ -125,6 +125,14 @@ def load_review_requests(csv_path: str) -> pd.DataFrame:
     """
     logger.info(f"レビュー依頼データを読み込み: {csv_path}")
     df = pd.read_csv(csv_path)
+
+    # nova_raw.csv は email/timestamp、旧データは reviewer_email/request_time
+    # どちらでも動くように統一する
+    if 'email' in df.columns and 'reviewer_email' not in df.columns:
+        df = df.rename(columns={'email': 'reviewer_email'})
+    if 'timestamp' in df.columns and 'request_time' not in df.columns:
+        df = df.rename(columns={'timestamp': 'request_time'})
+
     df['request_time'] = pd.to_datetime(df['request_time'])
     logger.info(f"総レビュー依頼数: {len(df)}")
     logger.info(f"承諾数: {(df['label']==1).sum()} ({(df['label']==1).sum()/len(df)*100:.1f}%)")
@@ -298,29 +306,31 @@ def extract_review_acceptance_trajectories(
         
         step_labels = []
         monthly_activity_histories = []  # 各月時点での活動履歴
-        
+        step_context_dates = []  # 各月ステップの基準日（month_end）
+        step_total_project_reviews = []  # 各月ステップ時点のプロジェクト全体レビュー依頼数
+
         for month_start in history_months[:-1]:  # 最後の月を除く
             month_end = month_start + pd.DateOffset(months=1)
-            
+
             # この月からfuture_window後のラベル計算期間
             future_start = month_end + pd.DateOffset(months=future_window_start_months)
             future_end = month_end + pd.DateOffset(months=future_window_end_months)
-            
+
             # 重要：future_endがtrain_endを超えないようにクリップ（データリーク防止）
             if future_end > train_end:
                 future_end = train_end
-            
+
             # train_endを超える場合はこの月のラベルは作成しない
             if future_start >= train_end:
                 continue
-            
+
             # 将来期間のレビュー依頼（訓練期間内のみ）
             month_future_df = df[
                 (df[date_col] >= future_start) &
                 (df[date_col] < future_end) &
                 (df[reviewer_col] == reviewer)
             ]
-            
+
             # この月のラベル：将来期間にレビュー依頼を受けて承諾したか
             if len(month_future_df) == 0:
                 # レビュー依頼なし → ラベル0
@@ -329,9 +339,14 @@ def extract_review_acceptance_trajectories(
                 # レビュー依頼あり → 承諾の有無
                 month_accepted = month_future_df[month_future_df[label_col] == 1]
                 month_label = 1 if len(month_accepted) > 0 else 0
-            
+
             step_labels.append(month_label)
-            
+            step_context_dates.append(month_end)  # 月末を基準日として保存
+
+            # プロジェクト全体のレビュー依頼数（history_start から month_end まで）
+            total_proj = len(df[(df[date_col] >= history_start) & (df[date_col] < month_end)])
+            step_total_project_reviews.append(total_proj)
+
             # この月時点（month_end）までの活動履歴を保存（LSTM用）
             month_history = reviewer_history[reviewer_history[date_col] < month_end]
             monthly_activities = []
@@ -344,6 +359,7 @@ def extract_review_acceptance_trajectories(
                     'request_time': row.get('request_time', row[date_col]),
                     'response_time': row.get('first_response_time'),  # response_time計算用
                     'accepted': row.get(label_col, 0) == 1,
+                    'owner_email': row.get('owner_email', ''),  # 協力スコア計算用
                     'is_cross_project': row.get('is_cross_project', False),  # Multi-project: cross-project flag
                     'files_changed': row.get('change_files_count', 0),
                     'lines_added': row.get('change_insertions', 0),
@@ -363,6 +379,7 @@ def extract_review_acceptance_trajectories(
                 'request_time': row.get('request_time', row[date_col]),
                 'response_time': row.get('first_response_time'),  # response_time計算用
                 'accepted': row.get(label_col, 0) == 1,
+                'owner_email': row.get('owner_email', ''),  # 協力スコア計算用
                 'is_cross_project': row.get('is_cross_project', False),  # Multi-project: cross-project flag
                 'files_changed': row.get('change_files_count', 0),
                 'lines_added': row.get('change_insertions', 0),
@@ -389,6 +406,8 @@ def extract_review_acceptance_trajectories(
             'developer_info': developer_info,
             'activity_history': activity_history,  # 全期間の活動履歴（評価用）
             'monthly_activity_histories': monthly_activity_histories,  # 各月時点の活動履歴（LSTM訓練用）
+            'step_context_dates': step_context_dates,  # 各月ステップの基準日（month_end）
+            'step_total_project_reviews': step_total_project_reviews,  # 各月ステップ時点のプロジェクト全体レビュー数
             'context_date': train_end,
             'step_labels': step_labels,
             'seq_len': len(step_labels),
@@ -592,6 +611,7 @@ def extract_evaluation_trajectories(
                 'request_time': row.get('request_time', row[date_col]),
                 'response_time': row.get('first_response_time'),  # response_time計算用
                 'accepted': row.get(label_col, 0) == 1,
+                'owner_email': row.get('owner_email', ''),  # 協力スコア計算用
                 'is_cross_project': row.get('is_cross_project', False),  # Multi-project: cross-project flag
                 # IRL特徴量計算用のデータを追加
                 'files_changed': row.get('change_files_count', 0),  # 強度計算用
@@ -617,10 +637,41 @@ def extract_evaluation_trajectories(
             'projects': reviewer_history['project'].unique().tolist() if 'project' in reviewer_history.columns else []
         }
         
+        # 月次活動履歴を構築（LSTM時系列入力用）
+        history_months = pd.date_range(start=history_start, end=cutoff_date, freq='MS')
+        monthly_activity_histories = []
+        step_context_dates = []
+        step_total_project_reviews = []
+        for month_start in history_months:
+            month_end = month_start + pd.DateOffset(months=1)
+            if month_end > cutoff_date:
+                month_end = cutoff_date
+            month_history_df = reviewer_history[reviewer_history[date_col] < month_end]
+            monthly_acts = []
+            for _, row in month_history_df.iterrows():
+                monthly_acts.append({
+                    'timestamp': row[date_col],
+                    'action_type': 'review',
+                    'project': row.get('project', 'unknown'),
+                    'response_time': row.get('first_response_time'),
+                    'accepted': row.get(label_col, 0) == 1,
+                    'owner_email': row.get('owner_email', ''),
+                    'files_changed': row.get('change_files_count', 0),
+                    'lines_added': row.get('change_insertions', 0),
+                    'lines_deleted': row.get('change_deletions', 0),
+                })
+            monthly_activity_histories.append(monthly_acts)
+            step_context_dates.append(month_end)
+            total_proj = len(df[(df[date_col] >= history_start) & (df[date_col] < month_end)])
+            step_total_project_reviews.append(total_proj)
+
         # 軌跡を作成
         trajectory = {
             'developer': developer_info,
             'activity_history': activity_history,
+            'monthly_activity_histories': monthly_activity_histories,
+            'step_context_dates': step_context_dates,
+            'step_total_project_reviews': step_total_project_reviews,
             'context_date': cutoff_date,
             'future_acceptance': future_acceptance,
             'reviewer': reviewer,
