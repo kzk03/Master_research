@@ -201,7 +201,8 @@ def train_and_evaluate_pattern(
     focal_gamma: float = None,
     negative_oversample_factor: int = 1,
     run_rf_baseline: bool = False,
-    hidden_dim: int = 128
+    hidden_dim: int = 128,
+    pu_unlabeled_weight: float = 0.0,
 ) -> Dict:
     """
     1つのパターンで訓練・評価を実行
@@ -288,7 +289,8 @@ def train_and_evaluate_pattern(
         future_window_end_months=pattern['train_fw_end'],
         min_history_requests=min_history,
         project=project,
-        negative_oversample_factor=negative_oversample_factor
+        negative_oversample_factor=negative_oversample_factor,
+        pu_unlabeled_weight=pu_unlabeled_weight,
     )
 
     if not train_trajectories:
@@ -379,7 +381,7 @@ def train_and_evaluate_pattern(
         future_window_start_months=pattern['eval_fw_start'],
         future_window_end_months=pattern['eval_fw_end'],
         min_history_requests=min_history,
-        project=project
+        project=project,
     )
 
     if not eval_trajectories:
@@ -737,6 +739,12 @@ def main():
         default=None,
         help="乱数シード（安定化用、未指定時はランダム）"
     )
+    parser.add_argument(
+        "--pu-weight",
+        type=float,
+        default=0.0,
+        help="PU学習: 除外Unlabeledサンプルに付与するソフト重み（0.0=無効、推奨: 0.02）"
+    )
 
     args = parser.parse_args()
 
@@ -765,7 +773,7 @@ def main():
     logger.info(f"評価スナップショット日: {eval_cutoff}")
     logger.info(f"評価履歴ウィンドウ: {args.eval_history_months}ヶ月")
 
-    # 評価パターンを生成（16パターン）
+    # 評価パターンを生成（10パターン: train<=eval の上三角）
     patterns = generate_evaluation_patterns(args.total_months)
 
     # 各パターンで訓練・評価
@@ -794,7 +802,8 @@ def main():
             focal_gamma=args.focal_gamma,
             negative_oversample_factor=args.negative_oversample_factor,
             run_rf_baseline=args.run_rf,
-            hidden_dim=args.hidden_dim
+            hidden_dim=args.hidden_dim,
+            pu_unlabeled_weight=args.pu_weight,
         )
 
         if metrics is None:

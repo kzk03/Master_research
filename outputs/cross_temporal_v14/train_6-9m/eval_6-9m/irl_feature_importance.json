@@ -1,0 +1,22 @@
+{
+  "experience_days": 0.0737236812710762,
+  "total_changes": 0.01632591150701046,
+  "total_reviews": 0.016850914806127548,
+  "recent_activity_frequency": 0.02494748868048191,
+  "avg_activity_gap": 0.03497440367937088,
+  "activity_trend": 0.04004180431365967,
+  "collaboration_score": 0.027126915752887726,
+  "code_quality_score": 0.031266845762729645,
+  "recent_acceptance_rate": 0.048158276826143265,
+  "review_load": 0.06817446649074554,
+  "days_since_last_activity": 0.03307724371552467,
+  "acceptance_trend": 0.06854570657014847,
+  "reciprocity_score": 0.0240432508289814,
+  "load_trend": 0.09518871456384659,
+  "core_reviewer_ratio": 0.023255998268723488,
+  "avg_action_intensity": 0.06274927407503128,
+  "avg_change_lines": 0.07012674957513809,
+  "avg_response_time": 0.04287705197930336,
+  "avg_review_size": 0.13358129560947418,
+  "repeat_collaboration_rate": 0.06496396660804749
+}

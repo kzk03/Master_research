@@ -439,16 +439,30 @@ class RetentionIRLSystem:
             ts = act.get('timestamp')
             if ts is None:
                 continue
-            rows.append({
-                'email': email,
-                'timestamp': pd.Timestamp(ts) if not isinstance(ts, pd.Timestamp) else ts,
-                'label': 1 if act.get('accepted', False) else 0,
-                'owner_email': act.get('owner_email', ''),
-                'change_insertions': act.get('lines_added', act.get('change_insertions', 0)) or 0,
-                'change_deletions': act.get('lines_deleted', act.get('change_deletions', 0)) or 0,
-                'change_files_count': act.get('files_changed', act.get('change_files_count', 0)) or 0,
-                'first_response_time': act.get('response_time', act.get('first_response_time')),
-            })
+            if act.get('action_type') == 'authored':
+                # 自分が作成したPR: owner_email=自分, email=レビュアー
+                # → owner_data (df[owner_email==email]) にヒットして total_changes / reciprocity_score が計算される
+                rows.append({
+                    'email': act.get('reviewer_email', ''),
+                    'timestamp': pd.Timestamp(ts) if not isinstance(ts, pd.Timestamp) else ts,
+                    'label': 0,
+                    'owner_email': email,  # 自分がオーナー
+                    'change_insertions': act.get('lines_added', act.get('change_insertions', 0)) or 0,
+                    'change_deletions': act.get('lines_deleted', act.get('change_deletions', 0)) or 0,
+                    'change_files_count': act.get('files_changed', act.get('change_files_count', 0)) or 0,
+                    'first_response_time': None,
+                })
+            else:
+                rows.append({
+                    'email': email,
+                    'timestamp': pd.Timestamp(ts) if not isinstance(ts, pd.Timestamp) else ts,
+                    'label': 1 if act.get('accepted', False) else 0,
+                    'owner_email': act.get('owner_email', ''),
+                    'change_insertions': act.get('lines_added', act.get('change_insertions', 0)) or 0,
+                    'change_deletions': act.get('lines_deleted', act.get('change_deletions', 0)) or 0,
+                    'change_files_count': act.get('files_changed', act.get('change_files_count', 0)) or 0,
+                    'first_response_time': act.get('response_time', act.get('first_response_time')),
+                })
         return pd.DataFrame(rows)
 
     def extract_features_tensor(
