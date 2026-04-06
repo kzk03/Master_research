@@ -53,7 +53,7 @@ import pandas as pd
 # 特徴量名の定義
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# 状態特徴量（19次元）: 開発者の現在の状態を表す特徴量
+# 状態特徴量（20次元）: 開発者の現在の状態を表す特徴量
 STATE_FEATURES = [
     'experience_days',
     'total_changes',
@@ -72,8 +72,9 @@ STATE_FEATURES = [
     'core_reviewer_ratio',
     'recent_rejection_streak',
     'acceptance_rate_last10',
-    'active_months_ratio',    # 追加: 活動した月の割合（定期性）
-    'response_time_trend',    # 追加: 応答速度のトレンド（変化方向）
+    'active_months_ratio',              # 追加: 活動した月の割合（定期性）
+    'response_time_trend',              # 追加: 応答速度のトレンド（変化方向）
+    'complex_pr_bias',                  # 追加: 複雑PRの承諾バイアス（全体承諾率との差分）
 ]
 
 # 行動特徴量（5次元）: 開発者の行動パターンを表す特徴量
@@ -229,6 +230,7 @@ def extract_common_features(
             'acceptance_rate_last10':     0.5,
             'active_months_ratio':        0.0,
             'response_time_trend':        0.0,
+            'complex_pr_bias':            0.0,  # データなし = バイアスなし
             'avg_action_intensity':       0.0,  # レビュー履歴なし = 実績なし
             'avg_change_lines':           0.0,
             'avg_response_time':          0.5,
@@ -395,6 +397,37 @@ def extract_common_features(
         # 正規化: 各半分のspeedは0〜1なので差は-1〜+1の範囲
         # 正 = 後半が速い（良い傾向）、負 = 後半が遅い（悪い傾向）
 
+    # 20. complex_pr_bias: 複雑PRの承諾バイアス（-1.0〜+1.0）
+    #     change_lines（insertions+deletions）が窓内の中央値より大きいPRの承諾率 - 全体承諾率。
+    #     正 → 複雑PRの方が承諾率が高い（意欲的）
+    #     負 → 複雑PRの方が承諾率が低い（回避傾向）
+    #     0.0 → バイアスなし（データ不足含む）
+    #     ※ 率そのままではなく差分にすることで:
+    #       - code_quality_score との高相関（r=0.776）を解消
+    #       - データなし=0.0（中立）が「全部断る（0.0）」と混同されない
+    if 'label' in dev_data.columns and len(dev_data) >= 2:
+        if 'change_insertions' in dev_data.columns and 'change_deletions' in dev_data.columns:
+            lines = dev_data['change_insertions'].fillna(0) + dev_data['change_deletions'].fillna(0)
+            median_lines = lines.median()
+            complex_prs = dev_data[lines > median_lines]
+            if len(complex_prs) > 0:
+                complex_rate = float((complex_prs['label'] == 1).mean())
+                complex_pr_bias = complex_rate - code_quality_score
+            else:
+                complex_pr_bias = 0.0  # 複雑PRなし = バイアス不明
+        elif 'change_files_count' in dev_data.columns:
+            median_files = dev_data['change_files_count'].median()
+            complex_prs = dev_data[dev_data['change_files_count'] > median_files]
+            if len(complex_prs) > 0:
+                complex_rate = float((complex_prs['label'] == 1).mean())
+                complex_pr_bias = complex_rate - code_quality_score
+            else:
+                complex_pr_bias = 0.0
+        else:
+            complex_pr_bias = 0.0
+    else:
+        complex_pr_bias = 0.0  # データ不足 = バイアスなし
+
     # 19. recent_rejection_streak: 直近の連続拒否数（0.0〜1.0、10件でキャップ）
     #     時系列順に並べた最後尾から連続してlabel=0が続く件数。
     #     「最近ずっと断っている」という離脱の予兆を捉える。
@@ -498,6 +531,7 @@ def extract_common_features(
         'acceptance_rate_last10':     acceptance_rate_last10,
         'active_months_ratio':        active_months_ratio,
         'response_time_trend':        response_time_trend,
+        'complex_pr_bias':            complex_pr_bias,
         # 行動特徴量（5次元）
         'avg_action_intensity':       avg_action_intensity,
         'avg_change_lines':           avg_change_lines,
@@ -534,8 +568,8 @@ def normalize_features(features: Dict[str, float]) -> Dict[str, float]:
     Returns:
         正規化された特徴量辞書（値は 0〜1、ただし activity_trend のみ -1〜1）
     """
-    # activity_trend / acceptance_trend / response_time_trend は -1.0〜1.0 の値なのでキャップ不要
-    _skip_norm = {'activity_trend', 'acceptance_trend', 'response_time_trend'}
+    # activity_trend / acceptance_trend / response_time_trend / complex_pr_bias は -1.0〜1.0 の値なのでキャップ不要
+    _skip_norm = {'activity_trend', 'acceptance_trend', 'response_time_trend', 'complex_pr_bias'}
     return {
         k: v if k in _skip_norm else min(v / _NORM_CAPS.get(k, 1.0), 1.0)
         for k, v in features.items()
@@ -630,6 +664,7 @@ def _get_default_features() -> Dict[str, float]:
         'acceptance_rate_last10':     0.5,
         'active_months_ratio':        0.0,
         'response_time_trend':        0.0,
+        'complex_pr_acceptance_rate': 0.5,   # データなし = 中立値
         # 行動特徴量
         'avg_action_intensity':       0.0,   # 活動なし = 実績なし
         'avg_change_lines':           0.0,
