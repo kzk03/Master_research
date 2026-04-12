@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, FrozenSet, List, Optional
 
 import numpy as np   # 数値計算ライブラリ。状態ベクトルは np.ndarray で表現
 import pandas as pd  # データフレーム操作
@@ -64,6 +64,11 @@ from IRL.features.common_features import (
     FEATURE_NAMES,
     extract_common_features,
     normalize_features,
+)
+from IRL.features.path_features import (
+    PATH_FEATURE_DIM,
+    PATH_FEATURE_NAMES,
+    PathFeatureExtractor,
 )
 
 logger = logging.getLogger(__name__)
@@ -168,10 +173,14 @@ class StateBuilder:
         window_days: int = 90,
         normalize: bool = True,
         use_macro: bool = False,  # M3 実装前は False のまま
+        path_extractor: Optional[PathFeatureExtractor] = None,
     ) -> None:
         self.window_days = window_days
         self.normalize = normalize
         self.use_macro = use_macro
+        # Phase 2 (Step 3): ディレクトリ親和度特徴量
+        # None のときは path features を付けない (ablation 用)
+        self.path_extractor = path_extractor
 
     # ── B-1: __init__ ────────────────────────────────────────────────────
     # 【変更できること】
@@ -205,6 +214,8 @@ class StateBuilder:
         names = list(MICRO_FEATURES)   # コピーして元のリストを変えないようにする
         if self.use_macro:
             names += MACRO_FEATURES
+        if self.path_extractor is not None:
+            names += PATH_FEATURE_NAMES
         return names
 
     @property
@@ -239,6 +250,7 @@ class StateBuilder:
         df: pd.DataFrame,
         developer_id: str,
         current_time: datetime,
+        task_dirs: Optional[FrozenSet[str]] = None,
     ) -> np.ndarray:
         """
         1人の開発者の状態ベクトルを構築して返す。
@@ -287,6 +299,15 @@ class StateBuilder:
             # [0.5, 0.3, ...] + [0.7, 0.2, 0.9] → [0.5, 0.3, ..., 0.7, 0.2, 0.9]
             vector = np.concatenate([vector, macro_vector])
 
+        # Path features (Step 3): ディレクトリ親和度を末尾に追加
+        if self.path_extractor is not None:
+            path_vector = self.path_extractor.compute(
+                developer_id=developer_id,
+                task_dirs=task_dirs,
+                current_time=current_time,
+            )
+            vector = np.concatenate([vector, path_vector])
+
         return vector
 
     def build_all(
@@ -294,6 +315,7 @@ class StateBuilder:
         df: pd.DataFrame,
         developer_ids: List[str],
         current_time: datetime,
+        task_dirs: Optional[FrozenSet[str]] = None,
     ) -> Dict[str, np.ndarray]:
         """
         複数の開発者の状態ベクトルを一括で構築して辞書で返す。
@@ -315,7 +337,7 @@ class StateBuilder:
         # 辞書内包表記: {キー: 値 for 変数 in イテラブル}
         # 各開発者について build() を呼んで辞書を作る
         return {
-            dev_id: self.build(df, dev_id, current_time)
+            dev_id: self.build(df, dev_id, current_time, task_dirs=task_dirs)
             for dev_id in developer_ids
         }
 

@@ -83,14 +83,20 @@ Step 5: scripts/train/train_rl_agent.py を作って学習を実行
 
 from __future__ import annotations
 
-# TODO (M2): stable-baselines3 をインストールしてから以下のコメントを外す
-# from stable_baselines3 import PPO, DQN
-# from stable_baselines3.common.evaluation import evaluate_policy
-
 import logging
 from typing import Dict, Optional
 
+import numpy as np
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.utils import get_action_masks
+from sb3_contrib.common.wrappers import ActionMasker
+
 logger = logging.getLogger(__name__)
+
+
+def _mask_fn(env):
+    """ActionMasker 用のマスク取得関数。env.action_masks() を呼ぶだけ。"""
+    return env.action_masks()
 
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  ブロック A: アルゴリズム定義（ALGORITHMS マッピング）                    ║
@@ -169,20 +175,40 @@ class ReviewAgent:
     # 【変更してはいけないこと】
     # ・self.env と self.algorithm の保存（後続メソッドが参照する）
 
-    def __init__(self, env, algorithm: str = "PPO") -> None:
-        self.env = env
+    def __init__(
+        self,
+        env,
+        algorithm: str = "MaskablePPO",
+        learning_rate: float = 3e-4,
+        n_steps: int = 256,
+        verbose: int = 0,
+        policy_kwargs: Optional[Dict] = None,
+    ) -> None:
         self.algorithm = algorithm
 
-        # TODO (M2): SB3 のモデルをここで初期化する
-        # 実装例:
-        #   AlgorithmClass = ALGORITHMS[algorithm]
-        #   self._model = AlgorithmClass(
-        #       policy="MlpPolicy",  # 全結合ニューラルネット（状態→行動）
-        #       env=env,
-        #       verbose=1,           # 学習ログを標準出力に表示
-        #   )
-        #   logger.info(f"エージェント初期化完了: algorithm={algorithm}")
-        self._model = None  # TODO (M2): 上記の実装に置き換える
+        # ActionMasker でラップして MaskablePPO が action_masks() を呼べるようにする
+        # （既にラップ済みなら二重ラップを避ける）
+        if not hasattr(env, "action_masks"):
+            raise ValueError(
+                "env は action_masks() メソッドを実装している必要があります "
+                "（ReviewEnv.action_masks を参照）"
+            )
+        self.env = ActionMasker(env, _mask_fn)
+
+        if algorithm != "MaskablePPO":
+            raise ValueError(
+                f"未対応のアルゴリズム: {algorithm}. 現状 MaskablePPO のみサポート"
+            )
+
+        self._model = MaskablePPO(
+            policy="MlpPolicy",
+            env=self.env,
+            learning_rate=learning_rate,
+            n_steps=n_steps,
+            verbose=verbose,
+            policy_kwargs=policy_kwargs or {},
+        )
+        logger.info(f"エージェント初期化完了: algorithm={algorithm}")
 
     # ── B-2: train() ─────────────────────────────────────────────────────
     # 【変更できること】
@@ -202,19 +228,10 @@ class ReviewAgent:
         報酬が大きくなるような行動方策を学習する。
 
         Args:
-            total_timesteps: 学習に使う総ステップ数
-                             多いほど精度が上がるが時間もかかる
-                             目安: 10万〜100万ステップ
-
-        TODO (M2): 以下を実装する
-            self._model.learn(total_timesteps=total_timesteps)
-            logger.info(f"学習完了: {total_timesteps} ステップ")
+            total_timesteps: 学習に使う総ステップ数（目安: 10万〜100万）
         """
-        # TODO (M2): 実装する
-        raise NotImplementedError(
-            "TODO (M2): train() を実装してください。\n"
-            "self._model.learn(total_timesteps=total_timesteps) を呼ぶだけです。"
-        )
+        self._model.learn(total_timesteps=total_timesteps)
+        logger.info(f"学習完了: {total_timesteps} ステップ")
 
     # ── B-3: evaluate() ──────────────────────────────────────────────────
     # 【変更できること】
@@ -223,6 +240,18 @@ class ReviewAgent:
     #       変動型開発者（33.3%）の承諾率を別途集計する
     # ・deterministic=False にすると確率的な行動で評価できる
     #   → 学習中の中間評価に使える（ランダム性があるため複数回平均を取る）
+
+    def predict(self, obs, deterministic: bool = True):
+        """
+        現在の方策で行動を選ぶ（マスク考慮あり）。
+
+        Returns:
+            (action, _states): MaskablePPO.predict と同じ形式
+        """
+        action_masks = get_action_masks(self.env)
+        return self._model.predict(
+            obs, action_masks=action_masks, deterministic=deterministic
+        )
 
     def evaluate(self, n_episodes: int = 10) -> Dict:
         """
@@ -237,33 +266,35 @@ class ReviewAgent:
         Returns:
             {"rewards": [各エピソードの合計報酬], "accepted_counts": [各エピソードの承諾数]}
 
-        TODO (M2): 以下を実装する
-            results = {"rewards": [], "accepted_counts": []}
-            for _ in range(n_episodes):
-                obs, _ = self.env.reset()
-                total_reward = 0.0
-                accepted_count = 0
-                done = False
-
-                while not done:
-                    # deterministic=True: 確率的でなく決定的に行動を選ぶ（評価時）
-                    action, _ = self._model.predict(obs, deterministic=True)
-                    obs, reward, terminated, truncated, info = self.env.step(action)
-                    total_reward += reward
-                    if info.get("accepted"):
-                        accepted_count += 1
-                    done = terminated or truncated
-
-                results["rewards"].append(total_reward)
-                results["accepted_counts"].append(accepted_count)
-
-            return results
+        Returns:
+            {"rewards": [...], "accepted_counts": [...], "n_steps": [...]}
         """
-        # TODO (M2): 実装する
-        raise NotImplementedError(
-            "TODO (M2): evaluate() を実装してください。\n"
-            "docs/rl_implementation_guide.md の Section 4 を参照してください。"
-        )
+        results: Dict[str, list] = {
+            "rewards": [],
+            "accepted_counts": [],
+            "n_steps": [],
+        }
+        for _ in range(n_episodes):
+            obs, _ = self.env.reset()
+            total_reward = 0.0
+            accepted_count = 0
+            steps = 0
+            done = False
+
+            while not done:
+                action, _ = self.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = self.env.step(action)
+                total_reward += float(reward)
+                if info.get("accepted"):
+                    accepted_count += 1
+                steps += 1
+                done = terminated or truncated
+
+            results["rewards"].append(total_reward)
+            results["accepted_counts"].append(accepted_count)
+            results["n_steps"].append(steps)
+
+        return results
 
     # ── B-4: save() / B-5: load() ────────────────────────────────────────
     # 【変更できること】
@@ -281,12 +312,9 @@ class ReviewAgent:
                   例: "outputs/rl_agent/ppo_model"
                   → "outputs/rl_agent/ppo_model.zip" として保存される
 
-        TODO (M2): 以下を実装する
-            self._model.save(path)
-            logger.info(f"モデルを保存: {path}")
         """
-        # TODO (M2): 実装する
-        raise NotImplementedError
+        self._model.save(path)
+        logger.info(f"モデルを保存: {path}")
 
     def load(self, path: str) -> None:
         """
@@ -299,11 +327,6 @@ class ReviewAgent:
             path: ロードするファイルパス（.zip は省略可）
                   例: "outputs/rl_agent/ppo_model"
 
-        TODO (M2): 以下を実装する
-            # SB3 の load() は クラスメソッドなので type() でクラスを取得して呼ぶ
-            AlgorithmClass = type(self._model)
-            self._model = AlgorithmClass.load(path, env=self.env)
-            logger.info(f"モデルをロード: {path}")
         """
-        # TODO (M2): 実装する
-        raise NotImplementedError
+        self._model = MaskablePPO.load(path, env=self.env)
+        logger.info(f"モデルをロード: {path}")
