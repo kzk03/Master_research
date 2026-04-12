@@ -664,7 +664,7 @@ def _get_default_features() -> Dict[str, float]:
         'acceptance_rate_last10':     0.5,
         'active_months_ratio':        0.0,
         'response_time_trend':        0.0,
-        'complex_pr_acceptance_rate': 0.5,   # データなし = 中立値
+        'complex_pr_bias':            0.0,   # データなし = バイアスなし
         # 行動特徴量
         'avg_action_intensity':       0.0,   # 活動なし = 実績なし
         'avg_change_lines':           0.0,
