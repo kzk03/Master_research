@@ -17,7 +17,7 @@ build/
 .venv/
 venv/
 ENV/
-env/
+/env/
 
 # IDE
 .vscode/
@@ -30,3 +30,5 @@ env/
 uv.lock
 
 .claude/
+
+docs/
