@@ -88,18 +88,22 @@ ACTION_FEATURES = [
     'repeat_collaboration_rate',
 ]
 
-# 入力ベクトルのリスト生成
+
 FEATURE_NAMES = STATE_FEATURES + ACTION_FEATURES
+
 STATE_FEATURES_WITH_PATH = STATE_FEATURES + PATH_FEATURE_NAMES  # 23次元
 FEATURE_NAMES_WITH_PATH = STATE_FEATURES_WITH_PATH + ACTION_FEATURES  # 28次元
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 正規化キャップ値
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# normalize_features() で各特徴量を 0〜1 に収めるときの上限値。
+# 指定がない特徴量のキャップは 1.0（= そのまま使う）。
+# 例: experience_days=365 のとき、730.0 でキャップすると 0.5 になる。
 _NORM_CAPS: Dict[str, float] = {
     'experience_days':  2500.0,  # 約6.8年でキャップ（実p90=2213日、13%が2000超のため拡張）
-    'total_changes':     500.0, 
-    'total_reviews':     500.0, 
+    'total_changes':     500.0,  # 500件でキャップ
+    'total_reviews':     500.0,  # 500件でキャップ
     'total_activity':   1000.0,  # total_changes + total_reviews のキャップ
     'avg_activity_gap':  120.0,  # 120日でキャップ（実p90=116日、60では17%超のため拡張）
     'avg_change_lines': 2000.0,  # 2000行でキャップ（実mean=632で500では半数超のため大幅拡張）
@@ -113,6 +117,7 @@ _NORM_CAPS: Dict[str, float] = {
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # メイン関数
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 def extract_common_features(
     df: pd.DataFrame,
     email: str,
@@ -142,8 +147,7 @@ def extract_common_features(
     Returns:
         特徴量名 → 値 の辞書（20次元）
     """
-    # ── reviewer としての行（レビュー依頼を受けた側）を絞り込む ──────
-    # email カラムは reviewer のメール（build_dataset.py で reviewer_email → email にリネーム済み）
+    # ── 　対象のemailの人がレビュアーとして依頼を受けた行を習得（レビューした開発者がいる前提で絞り込み） ──────
     mask = (
         (df['email'] == email) &
         (df['timestamp'] >= feature_start) &
@@ -152,7 +156,6 @@ def extract_common_features(
     dev_data = df[mask].copy()
 
     # ── owner としての行（自分が PR を作った側）を絞り込む ───────────
-    # owner_email カラムは PR 作成者のメール
     if 'owner_email' in df.columns:
         owner_mask = (
             (df['owner_email'] == email) &
@@ -172,23 +175,15 @@ def extract_common_features(
     # ========================================
 
     # 1. experience_days: feature窓内での活動日数（窓内の最初の活動日〜feature_end）
-    #    df全体を参照すると窓外の古い活動が経験値として計上されてしまうため、
-    #    feature_start〜feature_end 内の初出現日を基準にする。
-    #    例: 10年前に1回だけレビューした人が現役のように見えてしまうのを防ぐ。
-    window_reviewer = df[
-        (df['email'] == email) &
-        (df['timestamp'] >= feature_start) &
-        (df['timestamp'] < feature_end)
-    ]['timestamp']
-    window_owner = df[
-        (df['owner_email'] == email) &
-        (df['timestamp'] >= feature_start) &
-        (df['timestamp'] < feature_end)
-    ]['timestamp'] if 'owner_email' in df.columns else pd.Series(dtype='datetime64[ns]')
-    window_dates = pd.concat([window_reviewer, window_owner]).dropna()
+    #    最初の活動日からの経過日数。
+    window_dates = pd.concat([
+        dev_data['timestamp'],
+        owner_data['timestamp'] if 'timestamp' in owner_data.columns else pd.Series(dtype='datetime64[ns]') # データがない場合は空の Series を作成
+    ]).dropna()
+
     if len(window_dates) > 0:
         first_seen_in_window = window_dates.min()
-        experience_days = max((feature_end - first_seen_in_window).days, 0)
+        experience_days = max((feature_end - first_seen_in_window).days, 0) # 参加日からの経過日数
     else:
         experience_days = 0
 
@@ -206,16 +201,12 @@ def extract_common_features(
 
     # dev_data が空の場合は dates が使えないため、以降の計算を一部スキップする
     if len(dev_data) == 0:
-        total_project_reviews_early = len(df[
-            (df['timestamp'] >= feature_start) &
-            (df['timestamp'] < feature_end)
-        ])
         features = {
             'experience_days':            experience_days,
             'total_changes':              total_changes,
             'total_reviews':              0,
             'recent_activity_frequency':  0.0,
-            'avg_activity_gap':           60.0,  # レビュー履歴なし = 非アクティブ（キャップ値）
+            'avg_activity_gap':           _NORM_CAPS.get('avg_activity_gap', 120.0),  # レビュー履歴なし = 非アクティブ（キャップ値）
             'activity_trend':             0.0,
             'collaboration_score':        0.0,
             'code_quality_score':         0.5,
@@ -241,47 +232,43 @@ def extract_common_features(
             features = normalize_features(features)
         return features
 
-    # dev_data は空でないことが保証されている（上の早期リターン後）
-    dates = dev_data['timestamp'].sort_values()
+    dates = dev_data['timestamp'].sort_values() # レビュー依頼を受けた日時のリスト（昇順）
 
     # 4. recent_activity_frequency: 直近30日の活動頻度（件/日）
-    #    直近の活発さを測る指標。レビュー負荷の計算にも使う。
     recent_cutoff = feature_end - timedelta(days=30)
     recent_data = dev_data[dev_data['timestamp'] >= recent_cutoff]
     recent_activity_frequency = len(recent_data) / 30.0
 
     # 5. avg_activity_gap: 活動間隔の中央値（日数）
-    #    活動と活動の間隔の中央値。大きいほど「まばらにしか活動しない」。
     #    平均ではなく中央値を使うことで、長期不在期間の外れ値に引っ張られにくくする。
+    # TODO：これ離脱者と区別つかんくない？？
+
     if len(dates) > 1:
         gaps = dates.diff().dt.total_seconds() / 86400.0  # 秒 → 日
         avg_activity_gap = gaps.median()
     else:
-        avg_activity_gap = 60.0  # 1件しかなければ計算不能 = 非アクティブとみなす（キャップ値）
+        avg_activity_gap = _NORM_CAPS.get('avg_activity_gap', 120.0)  # TODO：これ新規開発者が非アクティブすぎる？？1件しかなければ計算不能 = 非アクティブとみなす（キャップ値）
 
     # 6. activity_trend: 活動トレンド（-1.0 / 0.0 / 1.0）
     #    期間の前半と後半の活動量を比較して増減を判定。
-    #    詳細は _calculate_activity_trend() を参照。
     activity_trend = _calculate_activity_trend(dates)
 
     # 7. collaboration_score: 協力スコア（0.0〜1.0）
-    #    ユニークな協力者（owner_email）の数をスコア化。
     #    多くの人と関わるほど高スコア。詳細は _calculate_collaboration_score() を参照。
     collaboration_score = _calculate_collaboration_score(dev_data)
 
     # ※ repeat_collaboration_rate は ACTION 特徴量だが、dev_data が必要なためここで計算する
     #    同じ owner から複数回レビュー依頼を受けた割合。
-    #    collaboration_score（幅）との違い: こちらは「深さ」= 信頼されて繰り返し頼まれる度合い。
-    #    例: owner が5人いて3人が2回以上依頼してきた → 3/5 = 0.6
+    #    collaboration_score（幅）との違い: こちらは「深さ」= 信頼されて繰り返し頼まれる度合い（リピーターの割合）
     if 'owner_email' in dev_data.columns and len(dev_data) > 0:
-        owner_counts = dev_data['owner_email'].value_counts()
+        owner_counts = dev_data['owner_email'].value_counts() # owner_email ごとの依頼回数
         repeat_collaboration_rate = float((owner_counts > 1).mean())
     else:
         repeat_collaboration_rate = 0.0
 
     # 9. code_quality_score: コード品質スコア（承諾率ベース）
     #    label=1（承諾）の割合。高いほど「受け入れられやすいコードを書く」開発者。
-    #    label カラムがない場合は 0.5（中立値）を返す。
+    #    label カラムがない場合は 0.5（中立値）を返す。TODO：中立値がこれでいいのか？
     if 'label' in dev_data.columns:
         accepted_count = (dev_data['label'] == 1).sum()
         code_quality_score = accepted_count / total_reviews if total_reviews > 0 else 0.5
@@ -294,7 +281,7 @@ def extract_common_features(
         recent_accepted = (recent_data['label'] == 1).sum()
         recent_acceptance_rate = recent_accepted / len(recent_data)
     else:
-        recent_acceptance_rate = 0.5  # データなしは中立値
+        recent_acceptance_rate = 0.5  # データなしは中立値　TODO：これでいいのか？
 
     # 11. review_load: レビュー負荷（直近の活動量 / 平均的な活動量）
     #     1.0 より大きければ「平均より忙しい」、小さければ「余裕がある」。
@@ -328,7 +315,7 @@ def extract_common_features(
     #       reviewer側の視点で計算: 自分がレビューしたownerの中で自分もレビューを依頼したことある人の割合
     if 'owner_email' in dev_data.columns and 'owner_email' in df.columns:
         owners_i_reviewed = set(dev_data['owner_email'].dropna().unique())
-        if len(owners_i_reviewed) > 0 and len(owner_data) > 0:
+        if len(owners_i_reviewed) > 0 and len(owner_data) > 0: # レビューしたことがあるか，かつPRを出したことがある場合
             # 自分がPRを出したことがある場合: 通常の相互レビュー率
             reviewers_of_my_prs = set(owner_data['email'].dropna().unique())
             mutual = owners_i_reviewed & reviewers_of_my_prs
@@ -371,7 +358,7 @@ def extract_common_features(
     #     recent_activity_frequency（件数/日）とは異なり「定期的に活動しているか」を捉える。
     #     例: 24ヶ月窓で12ヶ月活動 → 0.5
     total_months = max(int((feature_end - feature_start).days / 30), 1)
-    active_months = dev_data['timestamp'].dt.to_period('M').nunique() if len(dev_data) > 0 else 0
+    active_months = dev_data['timestamp'].dt.to_period('M').nunique() if len(dev_data) > 0 else 0 # 三項演算式でデータなしの場合も0になるように
     active_months_ratio = min(active_months / total_months, 1.0)
 
     # 18. response_time_trend: 応答速度のトレンド（-1.0〜+1.0）
@@ -643,13 +630,13 @@ def _get_default_features() -> Dict[str, float]:
         'total_changes':              0.0,
         'total_reviews':              0.0,
         'recent_activity_frequency':  0.0,
-        'avg_activity_gap':           60.0,  # 活動なし = 非アクティブ（キャップ値）
+        'avg_activity_gap':           _NORM_CAPS.get('avg_activity_gap', 120.0),  # 活動なし = 非アクティブ（キャップ値）
         'activity_trend':             0.0,
-        'collaboration_score':        0.0,   # 活動なし = 協力者なし
+        'collaboration_score':        0.0,
         'code_quality_score':         0.5,
         'recent_acceptance_rate':     0.5,
         'review_load':                0.0,
-        'days_since_last_activity':   730.0,  # cap値に合わせて更新
+        'days_since_last_activity':   _NORM_CAPS.get('days_since_last_activity', 730.0),  # cap値に合わせて更新
         'acceptance_trend':           0.0,
         'reciprocity_score':          0.0,
         'load_trend':                 0.0,

@@ -180,20 +180,16 @@ def _train_rf_classifier(
     window_days: int,
     delta_months: int,
     future_start_months: int = 0,
-    rf_train_end: Optional[datetime] = None,
 ):
     """
     卒論と同じ方式で RF を学習する。
 
-    rf_train_end が指定された場合、IRL と同じ train_end を基準に
-    ラベル期間を決定する（公平な比較）。
+    学習用の特徴量期間・ラベル期間を1期分前にずらして
+    prediction_time 以降のデータを使わないようにする。
     """
     from sklearn.ensemble import RandomForestClassifier
 
-    if rf_train_end is not None:
-        train_feat_end = pd.Timestamp(rf_train_end)
-    else:
-        train_feat_end = prediction_time - pd.DateOffset(months=future_start_months + delta_months)
+    train_feat_end = prediction_time - pd.DateOffset(months=future_start_months + delta_months)
     train_feat_start = train_feat_end - pd.Timedelta(days=window_days)
     train_label_start = train_feat_end + pd.DateOffset(months=future_start_months)
     train_label_end = train_label_start + pd.DateOffset(months=delta_months)
@@ -238,7 +234,6 @@ def baseline_rf(
     window_days: int,
     target_dirs: Dict[str, Set[str]],
     future_start_months: int = 0,
-    rf_train_end: Optional[datetime] = None,
 ) -> Tuple[Dict[str, float], Dict[str, float]]:
     """
     RF ベースライン: 卒論の RF で個人の continuation_prob を予測し、
@@ -249,7 +244,7 @@ def baseline_rf(
             dir_predictions: {directory: predicted_count}
             developer_probs: {email: continuation_prob}
     """
-    clf = _train_rf_classifier(df, prediction_time, window_days, delta_months, future_start_months, rf_train_end)
+    clf = _train_rf_classifier(df, prediction_time, window_days, delta_months, future_start_months)
 
     if clf is None:
         naive = baseline_naive(df, prediction_time, window_days)
@@ -509,8 +504,6 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="actual_count がこの値以下のディレクトリを「危険」とみなす",
     )
-    p.add_argument("--rf-train-end", type=str, default=None,
-                   help="RF_Dirの学習ラベル基準日（IRL train_endと���える）")
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument(
@@ -532,7 +525,6 @@ def evaluate_single_timepoint(
     danger_actual_threshold: int = 1,
     irl_dir_model_path: Optional[Path] = None,
     future_start_months: int = 0,
-    rf_train_end: Optional[datetime] = None,
 ) -> Dict[str, Dict[str, float]]:
     """単一時点の評価を実行し、全手法の結果を返す。"""
 
@@ -551,19 +543,14 @@ def evaluate_single_timepoint(
         all_devs.update(devs)
     logger.info(f"推論対象開発者数: {len(all_devs)}")
 
-    continuation_probs: Dict[str, float] = {}
-    variant_a: Dict[str, float] = {}
-    variant_b: Dict[str, float] = {}
-    if predictor is not None:
-        continuation_probs = predictor.predict_batch(
-            list(all_devs), prediction_time
-        )
-        # 3. IRL 予測 (Variant A / B)
-        variant_a, variant_b = predict_contributor_counts(
-            dir_developers, continuation_probs, path_extractor, prediction_time
-        )
-    else:
-        logger.info("グローバルIRLモデルなし: IRL_VariantA/B をスキップ")
+    continuation_probs = predictor.predict_batch(
+        list(all_devs), prediction_time
+    )
+
+    # 3. IRL 予測 (Variant A / B)
+    variant_a, variant_b = predict_contributor_counts(
+        dir_developers, continuation_probs, path_extractor, prediction_time
+    )
 
     # 3.5 スケーリング補正版 (Variant A-scaled)
     # IRL の continuation_prob は絶対値が低い傾向があるため、
@@ -590,7 +577,6 @@ def evaluate_single_timepoint(
     rf_pred, rf_probs = baseline_rf(
         df, prediction_time, delta_months, window_days, dir_developers,
         future_start_months=future_start_months,
-        rf_train_end=rf_train_end,
     )
 
     # 5. Ground truth
@@ -719,13 +705,7 @@ def evaluate_single_timepoint(
 
     # ── RF_Dir: ディレクトリ単位 RF ──
     logger.info("RF_Dir: ディレクトリ単位 RF で推論...")
-    if rf_train_end is not None:
-        # IRL と同じ train_end を使う（公平な比較）
-        _rf_base = pd.Timestamp(rf_train_end)
-    else:
-        # デフォルト: prediction_time から逆��
-        _rf_base = pred_time_pd - pd.DateOffset(months=future_start_months + delta_months)
-    rf_dir_train_end = _rf_base
+    rf_dir_train_end = pred_time_pd - pd.DateOffset(months=future_start_months + delta_months)
     rf_dir_train_start = rf_dir_train_end - pd.Timedelta(days=window_days)
     rf_dir_label_start = rf_dir_train_end + pd.DateOffset(months=future_start_months)
     rf_dir_label_end = rf_dir_label_start + pd.DateOffset(months=delta_months)
@@ -910,16 +890,12 @@ def main() -> None:
     prediction_time = datetime.fromisoformat(args.prediction_time)
     # history_start: データの最初から
     history_start = df["timestamp"].min().to_pydatetime()
-    if args.irl_model.exists():
-        predictor = BatchContinuationPredictor(
-            model_path=args.irl_model,
-            df=df,
-            history_start=history_start,
-            device=args.device,
-        )
-    else:
-        predictor = None
-        logger.warning(f"グローバルIRLモデルが見つからない: {args.irl_model}（スキップ）")
+    predictor = BatchContinuationPredictor(
+        model_path=args.irl_model,
+        df=df,
+        history_start=history_start,
+        device=args.device,
+    )
 
     if args.multi_timepoint:
         # 複数時点で評価
@@ -967,10 +943,6 @@ def main() -> None:
             )
     else:
         # 単一時点
-        rf_train_end_dt = (
-            datetime.fromisoformat(args.rf_train_end)
-            if args.rf_train_end else None
-        )
         results = evaluate_single_timepoint(
             df,
             path_extractor,
@@ -982,7 +954,6 @@ def main() -> None:
             args.danger_actual_threshold,
             irl_dir_model_path=args.irl_dir_model,
             future_start_months=args.future_start_months,
-            rf_train_end=rf_train_end_dt,
         )
 
         # CSV 保存
