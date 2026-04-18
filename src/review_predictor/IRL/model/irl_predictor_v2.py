@@ -280,9 +280,17 @@ class RetentionIRLSystem:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # ネットワーク初期化
-        self.network = RetentionIRLNetwork(
-            self.state_dim, self.action_dim, self.hidden_dim, self.dropout
-        ).to(self.device)
+        self.model_type = config.get('model_type', 0)
+        if self.model_type == 0:
+            self.network = RetentionIRLNetwork(
+                self.state_dim, self.action_dim, self.hidden_dim, self.dropout
+            ).to(self.device)
+        else:
+            from .network_variants import create_network
+            self.network = create_network(
+                self.model_type, self.state_dim, self.action_dim,
+                self.hidden_dim, self.dropout,
+            ).to(self.device)
         
         # オプティマイザー
         self.optimizer = optim.Adam(
@@ -1338,26 +1346,58 @@ class RetentionIRLSystem:
                     predicted_reward, predicted_continuation = self.network.forward_all_steps(
                         state_sequence, action_sequence, lengths, return_reward=True
                     )
-                    # [1, seq_len] → [seq_len] にflatten
-                    predicted_reward_flat = predicted_reward.squeeze(0)
-                    predicted_continuation_flat = predicted_continuation.squeeze(0)
-
-                    # 損失計算（月次集約ラベルを使用）
-                    targets = torch.tensor([1.0 if label else 0.0 for label in step_labels[:min_len]], device=self.device)
 
                     # サンプル重みを取得（依頼なし=0.5、依頼あり=1.0）
                     sample_weight = trajectory.get('sample_weight', 1.0)
                     sample_weights = torch.full([min_len], sample_weight, device=self.device)
 
-                    # 継続予測損失（Focal Loss を使用、重み付き）
-                    continuation_loss = self.focal_loss(
-                        predicted_continuation_flat, targets, sample_weights
-                    )
-
-                    # 報酬損失（月次集約ラベルから逆算）
-                    reward_loss = F.mse_loss(
-                        predicted_reward_flat, targets * 2.0 - 1.0  # -1 to 1
-                    )
+                    from .network_variants import is_multitask
+                    if self.model_type != 0 and is_multitask(self.model_type):
+                        # Multi-task: predicted_continuation は {0: [1,L], 1: [1,L], ...}
+                        # predicted_reward は [1, L]
+                        predicted_reward_flat = predicted_reward.squeeze(0)
+                        step_labels_per_window = trajectory.get('step_labels_per_window', {})
+                        continuation_loss = torch.tensor(0.0, device=self.device)
+                        n_active_heads = 0
+                        for head_idx, head_pred in predicted_continuation.items():
+                            window_key = f"{head_idx * 3}-{head_idx * 3 + 3}"
+                            head_labels = step_labels_per_window.get(window_key, step_labels[:min_len])
+                            head_targets = torch.tensor(
+                                [1.0 if l else 0.0 for l in head_labels[:min_len]],
+                                device=self.device,
+                            )
+                            # ラベルが全部同じ（情報なし）ならスキップ
+                            if len(head_targets) > 0:
+                                head_pred_flat = head_pred.squeeze(0)
+                                continuation_loss += self.focal_loss(
+                                    head_pred_flat, head_targets, sample_weights
+                                )
+                                n_active_heads += 1
+                        if n_active_heads > 0:
+                            continuation_loss = continuation_loss / n_active_heads
+                        # reward は primary window のラベルで計算
+                        primary_labels = step_labels[:min_len]
+                        targets = torch.tensor(
+                            [1.0 if l else 0.0 for l in primary_labels],
+                            device=self.device,
+                        )
+                        reward_loss = F.mse_loss(
+                            predicted_reward_flat, targets * 2.0 - 1.0
+                        )
+                    else:
+                        # Single-task: predicted_continuation は [1, L]
+                        predicted_reward_flat = predicted_reward.squeeze(0)
+                        predicted_continuation_flat = predicted_continuation.squeeze(0)
+                        targets = torch.tensor(
+                            [1.0 if label else 0.0 for label in step_labels[:min_len]],
+                            device=self.device,
+                        )
+                        continuation_loss = self.focal_loss(
+                            predicted_continuation_flat, targets, sample_weights
+                        )
+                        reward_loss = F.mse_loss(
+                            predicted_reward_flat, targets * 2.0 - 1.0
+                        )
 
                     loss_per_step = continuation_loss + reward_loss
 
@@ -1427,11 +1467,29 @@ class RetentionIRLSystem:
                         predicted_reward, predicted_continuation = self.network.forward_all_steps(
                             state_sequence, action_sequence, lengths, return_reward=True
                         )
-                        targets = torch.tensor([1.0 if label else 0.0 for label in step_labels[:min_len]], device=self.device)
                         sample_weight = trajectory.get('sample_weight', 1.0)
                         sample_weights = torch.full([min_len], sample_weight, device=self.device)
-                        c_loss = self.focal_loss(predicted_continuation.squeeze(0), targets, sample_weights)
-                        r_loss = F.mse_loss(predicted_reward.squeeze(0), targets * 2.0 - 1.0)
+
+                        if self.model_type != 0 and is_multitask(self.model_type):
+                            predicted_reward_flat = predicted_reward.squeeze(0)
+                            step_labels_per_window = trajectory.get('step_labels_per_window', {})
+                            c_loss = torch.tensor(0.0, device=self.device)
+                            n_heads = 0
+                            for hi, hp in predicted_continuation.items():
+                                wk = f"{hi * 3}-{hi * 3 + 3}"
+                                hl = step_labels_per_window.get(wk, step_labels[:min_len])
+                                ht = torch.tensor([1.0 if l else 0.0 for l in hl[:min_len]], device=self.device)
+                                if len(ht) > 0:
+                                    c_loss += self.focal_loss(hp.squeeze(0), ht, sample_weights)
+                                    n_heads += 1
+                            if n_heads > 0:
+                                c_loss = c_loss / n_heads
+                            targets = torch.tensor([1.0 if l else 0.0 for l in step_labels[:min_len]], device=self.device)
+                            r_loss = F.mse_loss(predicted_reward_flat, targets * 2.0 - 1.0)
+                        else:
+                            targets = torch.tensor([1.0 if label else 0.0 for label in step_labels[:min_len]], device=self.device)
+                            c_loss = self.focal_loss(predicted_continuation.squeeze(0), targets, sample_weights)
+                            r_loss = F.mse_loss(predicted_reward.squeeze(0), targets * 2.0 - 1.0)
                         val_loss += (c_loss + r_loss).item()
                         val_count += 1
                     except Exception:
@@ -1573,6 +1631,7 @@ class RetentionIRLSystem:
         context_date: Optional[datetime] = None,
         step_total_project_reviews: Optional[List[int]] = None,
         step_path_features: Optional[List[np.ndarray]] = None,
+        head_index: int = 0,
     ) -> Dict[str, Any]:
         """
         月次シーケンスを使った時系列予測（卒論設計準拠）。
@@ -1647,7 +1706,12 @@ class RetentionIRLSystem:
 
             predicted_reward, predicted_continuation = self.network(state_seq, action_seq, lengths)
 
-            continuation_prob = predicted_continuation.item()
+            # Multi-task モデルの場合は指定ヘッドの確率を取得
+            from .network_variants import is_multitask
+            if self.model_type != 0 and is_multitask(self.model_type):
+                continuation_prob = predicted_continuation[head_index].item()
+            else:
+                continuation_prob = predicted_continuation.item()
             if self.output_temperature and abs(self.output_temperature - 1.0) > 1e-6:
                 import math
                 p = min(max(continuation_prob, 1e-6), 1.0 - 1e-6)

@@ -69,13 +69,22 @@ class BatchContinuationPredictor:
         if self._irl_system is not None:
             return
 
+        import json
         from review_predictor.IRL.model.irl_predictor_v2 import RetentionIRLSystem
         from review_predictor.IRL.features.common_features import (
             ACTION_FEATURES,
         )
 
+        # モデルメタデータの読み込み（存在すればバリアント情報を取得）
+        metadata_path = self.model_path.parent / "model_metadata.json"
+        model_type = 0
+        if metadata_path.exists():
+            with open(metadata_path) as f:
+                metadata = json.load(f)
+            model_type = metadata.get("model_type", 0)
+
         # state_dim を保存された重みから自動判定
-        state_dict = torch.load(self.model_path, map_location=self.device)
+        state_dict = torch.load(self.model_path, map_location=self.device, weights_only=True)
         state_encoder_weight = state_dict.get("state_encoder.0.weight")
         if state_encoder_weight is not None:
             state_dim = state_encoder_weight.shape[1]
@@ -87,6 +96,7 @@ class BatchContinuationPredictor:
             "action_dim": len(ACTION_FEATURES),
             "hidden_dim": 128,
             "dropout": 0.1,
+            "model_type": model_type,
         }
         irl_system = RetentionIRLSystem(config)
         irl_system.device = self.device
@@ -96,7 +106,7 @@ class BatchContinuationPredictor:
         irl_system.network.eval()
 
         self._irl_system = irl_system
-        logger.info(f"IRL モデルをロード: {self.model_path}")
+        logger.info(f"IRL モデルをロード: {self.model_path} (model_type={model_type})")
 
     def _build_monthly_data(
         self,
@@ -226,6 +236,7 @@ class BatchContinuationPredictor:
         directory: str,
         prediction_time: datetime,
         path_extractor=None,
+        head_index: int = 0,
     ) -> float:
         """
         (開発者, ディレクトリ) ペアの continuation_prob を推論する。
@@ -267,6 +278,7 @@ class BatchContinuationPredictor:
             context_date=prediction_time,
             step_total_project_reviews=step_total_project_reviews,
             step_path_features=step_path_features,
+            head_index=head_index,
         )
 
         return float(result.get("continuation_probability", 0.5))

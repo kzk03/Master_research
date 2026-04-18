@@ -651,8 +651,10 @@ def evaluate_single_timepoint(
         for d, devs in dir_developers.items():
             dir_sum = 0.0
             for dev in devs:
+                head_index = future_start_months // 3
                 prob = dir_predictor.predict_developer_directory(
                     dev, d, prediction_time, path_extractor=path_extractor,
+                    head_index=head_index,
                 )
                 irl_dir_probs.setdefault(d, {})[dev] = prob
                 dir_sum += prob

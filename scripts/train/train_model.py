@@ -515,6 +515,7 @@ def extract_directory_level_trajectories(
     date_col: str = 'request_time',
     label_col: str = 'label',
     dirs_column: str = 'dirs',
+    multitask: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     ディレクトリ単位の軌跡を抽出する。
@@ -590,10 +591,14 @@ def extract_directory_level_trajectories(
             history_months = pd.date_range(start=history_start, end=history_end, freq='MS')
 
             step_labels = []
+            step_labels_per_window = {"0-3": [], "3-6": [], "6-9": [], "9-12": []} if multitask else None
             monthly_activity_histories = []
             step_context_dates = []
             step_total_project_reviews = []
             path_features_per_step = []
+
+            # Multi-task: 最も広い窓（9-12m）で future_start が train_end 内に収まるかで判定
+            MULTITASK_WINDOWS = [(0, 3), (3, 6), (6, 9), (9, 12)]
 
             for month_start in history_months[:-1]:
                 month_end = month_start + pd.DateOffset(months=1)
@@ -606,7 +611,7 @@ def extract_directory_level_trajectories(
                 if future_start >= train_end:
                     continue
 
-                # ディレクトリ D でのラベル
+                # ディレクトリ D でのラベル（primary window）
                 month_future_df = df[
                     (df[date_col] >= future_start) &
                     (df[date_col] < future_end) &
@@ -621,6 +626,28 @@ def extract_directory_level_trajectories(
                     month_label = 1 if len(month_accepted) > 0 else 0
 
                 step_labels.append(month_label)
+
+                # Multi-task: 全4窓のラベルも計算
+                if multitask:
+                    for fw_s, fw_e in MULTITASK_WINDOWS:
+                        mt_future_start = month_end + pd.DateOffset(months=fw_s)
+                        mt_future_end = month_end + pd.DateOffset(months=fw_e)
+                        if mt_future_end > train_end:
+                            mt_future_end = train_end
+                        if mt_future_start >= train_end:
+                            step_labels_per_window[f"{fw_s}-{fw_e}"].append(0)
+                            continue
+                        mt_df = df[
+                            (df[date_col] >= mt_future_start) &
+                            (df[date_col] < mt_future_end) &
+                            (df[reviewer_col] == reviewer) &
+                            (df[dirs_column].map(lambda ds: directory in ds if ds else False))
+                        ]
+                        if len(mt_df) == 0:
+                            mt_label = 0
+                        else:
+                            mt_label = 1 if len(mt_df[mt_df[label_col] == 1]) > 0 else 0
+                        step_labels_per_window[f"{fw_s}-{fw_e}"].append(mt_label)
                 step_context_dates.append(month_end)
 
                 total_proj = len(df[(df[date_col] >= history_start) & (df[date_col] < month_end)])
@@ -704,6 +731,8 @@ def extract_directory_level_trajectories(
                 'future_acceptance': future_acceptance,
                 'sample_weight': sample_weight,
             }
+            if step_labels_per_window is not None:
+                trajectory['step_labels_per_window'] = step_labels_per_window
             trajectories.append(trajectory)
 
     logger.info("=" * 80)
@@ -1142,6 +1171,13 @@ def main():
         default="data/raw_json/openstack__nova.json",
         help="ディレクトリマッピング用の raw JSON パス"
     )
+    parser.add_argument(
+        "--model-type",
+        type=int,
+        default=0,
+        choices=[0, 1, 2, 3, 4, 5],
+        help="モデルバリアント (0:LSTM, 1:LSTM+Attn, 2:Transformer, 3:LSTM+MT, 4:LSTM+Attn+MT, 5:Trans+MT)"
+    )
     args = parser.parse_args()
     
     # 出力ディレクトリを作成
@@ -1176,7 +1212,9 @@ def main():
             })
             path_extractor = PathFeatureExtractor(df_for_path, window_days=180)
 
-            logger.info("ディレクトリ単位の軌跡を抽出...")
+            from review_predictor.IRL.model.network_variants import is_multitask
+            _multitask = is_multitask(args.model_type)
+            logger.info(f"ディレクトリ単位の軌跡を抽出... (multitask={_multitask})")
             train_trajectories = extract_directory_level_trajectories(
                 df,
                 train_start=train_start,
@@ -1184,6 +1222,7 @@ def main():
                 path_extractor=path_extractor,
                 future_window_start_months=args.future_window_start,
                 future_window_end_months=args.future_window_end,
+                multitask=_multitask,
             )
             state_dim = 23  # 20 + path(3)
         else:
@@ -1212,6 +1251,7 @@ def main():
             'seq_len': 0,
             'learning_rate': 0.0001,
             'dropout': 0.2,
+            'model_type': args.model_type,
         }
         irl_system = RetentionIRLSystem(config)
         
@@ -1290,7 +1330,20 @@ def main():
         model_path = output_dir / "irl_model.pt"
         torch.save(irl_system.network.state_dict(), model_path)
         logger.info(f"モデルを保存: {model_path}")
-        
+
+        # モデルメタデータを保存
+        metadata = {
+            'model_type': args.model_type,
+            'state_dim': state_dim,
+            'action_dim': 5,
+            'hidden_dim': 128,
+            'dropout': 0.2,
+        }
+        metadata_path = output_dir / "model_metadata.json"
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        logger.info(f"メタデータを保存: {metadata_path}")
+
         # 閾値を保存
         threshold_path = output_dir / "optimal_threshold.json"
         with open(threshold_path, 'w') as f:
