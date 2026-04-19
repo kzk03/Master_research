@@ -57,6 +57,7 @@ from review_predictor.IRL.features.path_features import (
     PathFeatureExtractor,
     attach_dirs_to_df,
     load_change_dir_map,
+    load_change_dir_map_multi,
 )
 from review_predictor.IRL.model.batch_predictor import BatchContinuationPredictor
 
@@ -481,8 +482,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data", type=Path, default=Path("data/nova_raw.csv"))
     p.add_argument(
         "--raw-json",
-        type=Path,
-        default=Path("data/raw_json/openstack__nova.json"),
+        type=str,
+        nargs="+",
+        default=["data/raw_json/openstack__nova.json"],
     )
     p.add_argument(
         "--irl-model",
@@ -509,8 +511,10 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="actual_count がこの値以下のディレクトリを「危険」とみなす",
     )
+    p.add_argument("--rf-future-start-months", type=int, default=None,
+                   help="RFの訓練ラベル窓の開始オフセット（未指定時は--future-start-monthsと同じ）")
     p.add_argument("--rf-train-end", type=str, default=None,
-                   help="RF_Dirの学習ラベル基準日（IRL train_endと���える）")
+                   help="RF_Dirの学習ラベル基準日（IRL train_endと揃える）")
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument(
@@ -533,8 +537,12 @@ def evaluate_single_timepoint(
     irl_dir_model_path: Optional[Path] = None,
     future_start_months: int = 0,
     rf_train_end: Optional[datetime] = None,
+    rf_future_start_months: Optional[int] = None,
 ) -> Dict[str, Dict[str, float]]:
     """単一時点の評価を実行し、全手法の結果を返す。"""
+    # RF訓練ラベル窓（未指定なら評価窓と同じ = 従来動作）
+    if rf_future_start_months is None:
+        rf_future_start_months = future_start_months
 
     logger.info(f"=== 予測時点 T={prediction_time}, 将来窓={future_start_months}-{future_start_months+delta_months}ヶ月 ===")
 
@@ -589,7 +597,7 @@ def evaluate_single_timepoint(
     linear_pred = baseline_linear(df, prediction_time, delta_months)
     rf_pred, rf_probs = baseline_rf(
         df, prediction_time, delta_months, window_days, dir_developers,
-        future_start_months=future_start_months,
+        future_start_months=rf_future_start_months,
         rf_train_end=rf_train_end,
     )
 
@@ -729,7 +737,7 @@ def evaluate_single_timepoint(
         _rf_base = pred_time_pd - pd.DateOffset(months=future_start_months + delta_months)
     rf_dir_train_end = _rf_base
     rf_dir_train_start = rf_dir_train_end - pd.Timedelta(days=window_days)
-    rf_dir_label_start = rf_dir_train_end + pd.DateOffset(months=future_start_months)
+    rf_dir_label_start = rf_dir_train_end + pd.DateOffset(months=rf_future_start_months)
     rf_dir_label_end = rf_dir_label_start + pd.DateOffset(months=delta_months)
 
     rf_dir_train_df = extract_features_for_window_directory(
@@ -902,7 +910,10 @@ def main() -> None:
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
     # ディレクトリマッピング
-    cdm = load_change_dir_map(args.raw_json, depth=args.dir_depth)
+    if len(args.raw_json) == 1:
+        cdm = load_change_dir_map(args.raw_json[0], depth=args.dir_depth)
+    else:
+        cdm = load_change_dir_map_multi(args.raw_json, depth=args.dir_depth)
     df = attach_dirs_to_df(df, cdm)
 
     # PathFeatureExtractor
@@ -973,6 +984,7 @@ def main() -> None:
             datetime.fromisoformat(args.rf_train_end)
             if args.rf_train_end else None
         )
+        rf_fsm = args.rf_future_start_months if args.rf_future_start_months is not None else args.future_start_months
         results = evaluate_single_timepoint(
             df,
             path_extractor,
@@ -985,6 +997,7 @@ def main() -> None:
             irl_dir_model_path=args.irl_dir_model,
             future_start_months=args.future_start_months,
             rf_train_end=rf_train_end_dt,
+            rf_future_start_months=rf_fsm,
         )
 
         # CSV 保存
