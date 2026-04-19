@@ -152,6 +152,23 @@ def load_change_dir_map(
     return result
 
 
+def load_change_dir_map_multi(
+    json_paths: list[str | Path],
+    depth: int = 2,
+) -> Dict[str, FrozenSet[str]]:
+    """複数の raw JSON ファイルから change_dir_map を統合構築する。"""
+    merged: Dict[str, FrozenSet[str]] = {}
+    for jp in json_paths:
+        partial = load_change_dir_map(jp, depth=depth)
+        merged.update(partial)
+        logger.info(f"  {Path(jp).name}: {len(partial)} changes")
+    logger.info(
+        f"load_change_dir_map_multi: 合計 {len(merged)} changes "
+        f"({len(json_paths)} files)"
+    )
+    return merged
+
+
 def attach_dirs_to_df(
     df: pd.DataFrame,
     change_dir_map: Dict[str, FrozenSet[str]],
