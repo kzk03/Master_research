@@ -1168,8 +1168,9 @@ def main():
     parser.add_argument(
         "--raw-json",
         type=str,
-        default="data/raw_json/openstack__nova.json",
-        help="ディレクトリマッピング用の raw JSON パス"
+        nargs="+",
+        default=["data/raw_json/openstack__nova.json"],
+        help="ディレクトリマッピング用の raw JSON パス（複数指定可）"
     )
     parser.add_argument(
         "--model-type",
@@ -1200,9 +1201,13 @@ def main():
                 PathFeatureExtractor,
                 attach_dirs_to_df,
                 load_change_dir_map,
+                load_change_dir_map_multi,
             )
             logger.info("ディレクトリ単位モード: ディレクトリマッピングを構築...")
-            cdm = load_change_dir_map(args.raw_json, depth=2)
+            if len(args.raw_json) == 1:
+                cdm = load_change_dir_map(args.raw_json[0], depth=2)
+            else:
+                cdm = load_change_dir_map_multi(args.raw_json, depth=2)
             df = attach_dirs_to_df(df, cdm, column='dirs')
             # PathFeatureExtractor は 'email', 'timestamp' 列を期待するので
             # train_model.py のリネーム後の列名を戻したコピーを渡す
