@@ -11,6 +11,11 @@ uv pip install -e .  # パッケージインストール
 
 # スクリプト実行
 uv run python scripts/train/train_model.py --help
+
+# 予測結果の評価（複数プロジェクトのJSON指定やRFの将来窓の個別設定に対応）
+uv run python scripts/analyze/eval_path_prediction.py \
+    --raw-json data/raw_json/openstack__nova.json data/raw_json/other_project.json \
+    --rf-future-start-months 1
 ```
 
 ## 📚 初学者向けガイド
@@ -36,30 +41,28 @@ Master_research/
 ├── scripts/
 │   ├── pipeline/              # データ生成
 │   ├── train/                 # モデル訓練
-│   └── analyze/               # 結果分析・可視化
-├── data/                      # データセット
-├── outputs/                   # 実験結果
-└── docs/                      # ドキュメント
-    ├── LEARNING_ROADMAP.md    # 学習ガイド ⭐
-    └── research_design_roadmap.md  # 研究設計書
+│   ├── analyze/               # 結果分析・可視化
+│   └── run_cross_temporal_dir.sh # クロス時間・プロジェクト評価一括スクリプト
+├── data/                      # データセット (raw_json/, csv など)
+├── outputs/                   # 実験結果一覧・保存済みモデル (eval_results/ など)
+└── tests/                     # テストコード ( pytest 用 )
 ```
 
 ## 🎯 研究フェーズ
 
-### Phase 1: IRL予測モデル (完了)
+### Previous Work: 個人単位のレビュー継続予測 (卒論 / 完了)
 
-- 開発者の報酬関数を推定
-- レビュー継続確率を予測
-- LSTM + Focal Loss
+- 逆強化学習（IRL）を用いて各開発者のモチベーション（報酬関数）を推定
+- LSTM + Focal Loss を用いて「ある人が、このタイミングで継続するか（継続確率）」を予測
 
-### Phase 2: RL推薦最適化 (進行中)
+### Phase 1: 機能単位の貢献者数予測 (修士研究 柱1 / 進行中)
 
-- タスク推薦戦略の最適化
-- シミュレーション評価
-- マルチエージェント環境
+- 卒論モデルの継続確率をディレクトリ（機能・パス）単位で拡張・集計
+- 将来のプロジェクトモジュールごとの貢献者数を予測
+- 「どの機能の開発者が不足するか（無人化の危険）」を事前に検知
 
-## 📖 ドキュメント
+### Phase 2: タスク発生時のレビュアー推薦 (修士研究 柱2 / 進行中)
 
-- [学習ロードマップ](docs/LEARNING_ROADMAP.md) - 初学者向け学習パス
-- [研究設計書](docs/research_design_roadmap.md) - 研究全体の設計
-- [RL実装ガイド](docs/rl_implementation_guide.md) - Phase 2の実装方針
+- 提出されたPR（タスク内容）と、各開発者の動的な状態（経験・負荷・パス親和度）を考慮
+- 強化学習（RL）エージェントが、プロジェクト全体の健全性（負荷分散・応答速度・バス係数）を最適化するような推薦戦略を学習
+- 従来の静的なレビュアー推薦ではなく、時間的変化を伴うシミュレーション評価を実施
