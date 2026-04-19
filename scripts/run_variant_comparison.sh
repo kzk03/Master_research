@@ -81,11 +81,13 @@ for vi in "${!VARIANTS[@]}"; do
                     continue
                 fi
 
+                train_fs_val="${TRAIN_FS[$ti]}"
                 echo "[$vname train_${train_win}m -> eval_${eval_win}m] 評価開始..."
                 uv run python scripts/analyze/eval_path_prediction.py \
                     --prediction-time "$EVAL_CUTOFF" \
                     --delta-months 3 \
                     --future-start-months "$eval_fs" \
+                    --rf-future-start-months "$train_fs_val" \
                     --irl-dir-model "$model_path" \
                     --rf-train-end "$TRAIN_END" \
                     --output-dir "$eval_dir"
@@ -143,11 +145,13 @@ for vi in "${!VARIANTS[@]}"; do
                     continue
                 fi
 
+                train_fs_val="${TRAIN_FS[$i]}"
                 echo "[$vname train_${train_win}m -> eval_${eval_win}m] 評価開始..."
                 uv run python scripts/analyze/eval_path_prediction.py \
                     --prediction-time "$EVAL_CUTOFF" \
                     --delta-months 3 \
                     --future-start-months "$eval_fs" \
+                    --rf-future-start-months "$train_fs_val" \
                     --irl-dir-model "$model_path" \
                     --rf-train-end "$TRAIN_END" \
                     --output-dir "$eval_dir"
