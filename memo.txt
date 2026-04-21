@@ -1,0 +1,8 @@
+# 同期コマンド
+# Local → Server
+rsync -avz --progress /Users/kazuki-h/Master_research socsel:/mnt/data1/kazuki-h/
+
+
+# Server → Local
+# Server → Local (おすすめ)
+rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/

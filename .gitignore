@@ -26,6 +26,7 @@ ENV/
 *.swo
 *~
 
+
 # UV
 uv.lock
 
@@ -33,3 +34,5 @@ uv.lock
 
 docs/
 study_materials_post_thesis/
+
+.env

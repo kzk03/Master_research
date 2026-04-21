@@ -1,0 +1,14 @@
+services:
+  app:
+    container_name: irl_dir
+    image: irl_dir
+    build:
+      context: .
+      args:
+        UID: ${UID}
+        GID: ${GID}
+        USERNAME: ${USERNAME}
+    volumes:
+      - ./:/app/
+    stdin_open: true
+    tty: true
