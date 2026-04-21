@@ -552,7 +552,9 @@ def extract_directory_level_trajectories(
     negative_count = 0
     skipped_count = 0
 
-    for reviewer in active_reviewers:
+    for ri, reviewer in enumerate(active_reviewers):
+        if (ri + 1) % 50 == 0 or ri == 0:
+            logger.info(f"  軌跡抽出: {ri + 1}/{len(active_reviewers)} レビュアー処理中...")
         reviewer_history = history_df[history_df[reviewer_col] == reviewer]
 
         # このレビュアーが触ったディレクトリ
@@ -1179,6 +1181,12 @@ def main():
         choices=[0, 1, 2, 3, 4, 5],
         help="モデルバリアント (0:LSTM, 1:LSTM+Attn, 2:Transformer, 3:LSTM+MT, 4:LSTM+Attn+MT, 5:Trans+MT)"
     )
+    parser.add_argument(
+        "--trajectories-cache",
+        type=str,
+        default=None,
+        help="軌跡キャッシュファイルのパス（.pkl）。存在すればロード、なければ抽出後に保存"
+    )
     args = parser.parse_args()
     
     # 出力ディレクトリを作成
@@ -1193,9 +1201,18 @@ def main():
     train_end = pd.Timestamp(args.train_end)
     logger.info(f"将来窓: {args.future_window_start}～{args.future_window_end}ヶ月")
     
-    # 訓練用軌跡を抽出
+    # 訓練用軌跡を抽出（キャッシュ対応）
+    import pickle
+    cache_path = args.trajectories_cache
+
     if args.model is None:
-        if args.directory_level:
+        if cache_path and Path(cache_path).exists():
+            logger.info(f"軌跡キャッシュを読み込み: {cache_path}")
+            with open(cache_path, 'rb') as f:
+                train_trajectories = pickle.load(f)
+            logger.info(f"キャッシュから {len(train_trajectories)} 軌跡を読み込みました")
+            state_dim = 23 if args.directory_level else 20
+        elif args.directory_level:
             # ディレクトリ単位モード
             from review_predictor.IRL.features.path_features import (
                 PathFeatureExtractor,
@@ -1230,6 +1247,13 @@ def main():
                 multitask=_multitask,
             )
             state_dim = 23  # 20 + path(3)
+
+            # キャッシュ保存
+            if cache_path:
+                Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(train_trajectories, f)
+                logger.info(f"軌跡キャッシュを保存: {cache_path}")
         else:
             logger.info("訓練用軌跡を抽出...")
             train_trajectories = extract_review_acceptance_trajectories(
