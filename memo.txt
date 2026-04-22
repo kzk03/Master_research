@@ -1,8 +1,9 @@
 # 同期コマンド
 # Local → Server
-rsync -avz --progress /Users/kazuki-h/Master_research socsel:/mnt/data1/kazuki-h/
-
+rsync -avz --exclude='.git/' --progress /Users/kazuki-h/Master_research socsel:/mnt/data1/kazuki-h/
 
 # Server → Local
-# Server → Local (おすすめ)
 rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
+
+# サーバーの outputs フォルダを、ローカルの現在の場所に持ってくる
+rsync -avz --progress socsel:/mnt/data1/kazuki-h/Master_research/outputs/ ./outputs/
