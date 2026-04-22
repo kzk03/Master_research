@@ -1,11 +1,9 @@
 #!/bin/bash
 # 1つのバリアントに対して10パターン（train<=eval制約）を実行
+# 訓練・評価ともに並列実行
 #
 # 使い方:
 #   bash scripts/run_variant_single.sh <variant_id> <variant_name> [outbase]
-#
-# 例:
-#   bash scripts/run_variant_single.sh 0 lstm_baseline outputs/variant_comparison_combined
 
 set -e
 
@@ -39,13 +37,42 @@ TRAIN_FE=(3 6 9 12)
 CACHE_DIR="$OUTBASE/trajectory_cache"
 mkdir -p "$CACHE_DIR"
 
+# 評価1パターンを実行する関数
+run_eval() {
+    local model_path="$1"
+    local train_win="$2"
+    local eval_win="$3"
+    local eval_fs="$4"
+    local train_fs_val="$5"
+    local eval_dir="$OUTBASE/$VNAME/train_${train_win}m/eval_${eval_win}m"
+    mkdir -p "$eval_dir"
+
+    if [ -f "$eval_dir/summary_metrics.json" ]; then
+        echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] スキップ（評価済み）"
+        return
+    fi
+
+    echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価開始..."
+    uv run python scripts/analyze/eval_path_prediction.py \
+        --data "$REVIEWS" \
+        --raw-json "${RAW_JSON[@]}" \
+        --prediction-time "$EVAL_CUTOFF" \
+        --delta-months 3 \
+        --future-start-months "$eval_fs" \
+        --rf-future-start-months "$train_fs_val" \
+        --irl-dir-model "$model_path" \
+        --rf-train-end "$TRAIN_END" \
+        --output-dir "$eval_dir"
+    echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
+}
+
 echo ""
 echo "============================================================"
 echo "  バリアント $VTYPE: $VNAME"
 echo "============================================================"
 
 if [ "$VTYPE" -ge 3 ]; then
-    # ── Multi-task: 1モデルで全窓をカバー ──
+    # ── Multi-task: 1モデル訓練 ──
     model_dir="$OUTBASE/$VNAME/train_all"
     mkdir -p "$model_dir"
 
@@ -69,39 +96,22 @@ if [ "$VTYPE" -ge 3 ]; then
         echo "[$VNAME] 学習完了"
     fi
 
-    # 評価: 10パターン
+    # 評価: 10パターン並列
     model_path="$model_dir/irl_model.pt"
     for ti in 0 1 2 3; do
         for ei in $(seq $ti 3); do
             train_win="${TRAIN_WINDOWS[$ti]}"
             eval_win="${TRAIN_WINDOWS[$ei]}"
             eval_fs="${TRAIN_FS[$ei]}"
-            eval_dir="$OUTBASE/$VNAME/train_${train_win}m/eval_${eval_win}m"
-            mkdir -p "$eval_dir"
-
-            if [ -f "$eval_dir/summary_metrics.json" ]; then
-                echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] スキップ（評価済み）"
-                continue
-            fi
-
             train_fs_val="${TRAIN_FS[$ti]}"
-            echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価開始..."
-            uv run python scripts/analyze/eval_path_prediction.py \
-                --data "$REVIEWS" \
-                --raw-json "${RAW_JSON[@]}" \
-                --prediction-time "$EVAL_CUTOFF" \
-                --delta-months 3 \
-                --future-start-months "$eval_fs" \
-                --rf-future-start-months "$train_fs_val" \
-                --irl-dir-model "$model_path" \
-                --rf-train-end "$TRAIN_END" \
-                --output-dir "$eval_dir"
-            echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
+            run_eval "$model_path" "$train_win" "$eval_win" "$eval_fs" "$train_fs_val" &
         done
     done
+    echo "[$VNAME] 評価10パターン並列起動、完了待ち..."
+    wait
 
 else
-    # ── Non-multi-task: 4モデル個別訓練 ──
+    # ── Non-multi-task: 4モデル並列訓練 ──
     for i in 0 1 2 3; do
         win="${TRAIN_WINDOWS[$i]}"
         fs="${TRAIN_FS[$i]}"
@@ -125,12 +135,13 @@ else
                 --future-window-start "$fs" \
                 --future-window-end "$fe" \
                 --trajectories-cache "$CACHE_DIR/traj_${win}.pkl" \
-                --output "$model_dir"
-            echo "[$VNAME train_${win}m] 学習完了"
+                --output "$model_dir" &
         fi
     done
+    echo "[$VNAME] 訓練4窓並列起動、完了待ち..."
+    wait
 
-    # 評価: 10パターン
+    # 評価: 10パターン並列
     for ti in 0 1 2 3; do
         train_win="${TRAIN_WINDOWS[$ti]}"
         model_path="$OUTBASE/$VNAME/train_${train_win}m/irl_model.pt"
@@ -143,29 +154,12 @@ else
         for ei in $(seq $ti 3); do
             eval_win="${TRAIN_WINDOWS[$ei]}"
             eval_fs="${TRAIN_FS[$ei]}"
-            eval_dir="$OUTBASE/$VNAME/train_${train_win}m/eval_${eval_win}m"
-            mkdir -p "$eval_dir"
-
-            if [ -f "$eval_dir/summary_metrics.json" ]; then
-                echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] スキップ（評価済み）"
-                continue
-            fi
-
             train_fs_val="${TRAIN_FS[$ti]}"
-            echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価開始..."
-            uv run python scripts/analyze/eval_path_prediction.py \
-                --data "$REVIEWS" \
-                --raw-json "${RAW_JSON[@]}" \
-                --prediction-time "$EVAL_CUTOFF" \
-                --delta-months 3 \
-                --future-start-months "$eval_fs" \
-                --rf-future-start-months "$train_fs_val" \
-                --irl-dir-model "$model_path" \
-                --rf-train-end "$TRAIN_END" \
-                --output-dir "$eval_dir"
-            echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
+            run_eval "$model_path" "$train_win" "$eval_win" "$eval_fs" "$train_fs_val" &
         done
     done
+    echo "[$VNAME] 評価10パターン並列起動、完了待ち..."
+    wait
 fi
 
 echo ""

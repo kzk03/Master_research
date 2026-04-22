@@ -2,6 +2,10 @@ services:
   app:
     container_name: irl_dir
     image: irl_dir
+    deploy:
+      resources:
+        limits:
+          cpus: '30.0'
     build:
       context: .
       args:

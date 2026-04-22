@@ -35,12 +35,12 @@ WINDOWS=("0-3" "3-6" "6-9" "9-12")
 FS=(0 3 6 9)
 FE=(3 6 9 12)
 
-echo "=== 軌跡キャッシュ作成開始 ==="
+echo "=== 軌跡キャッシュ作成開始（5並列） ==="
 
-# Non-multi-task: 4つの将来窓
+# Non-multi-task: 4つの将来窓を並列実行
 for i in 0 1 2 3; do
     win="${WINDOWS[$i]}"
-    echo "[${win}] 軌跡抽出中..."
+    echo "[${win}] 軌跡抽出開始..."
     uv run python scripts/train/extract_trajectories.py \
         --reviews "$REVIEWS" \
         --raw-json "${RAW_JSON[@]}" \
@@ -48,11 +48,11 @@ for i in 0 1 2 3; do
         --train-end "$TRAIN_END" \
         --future-window-start "${FS[$i]}" \
         --future-window-end "${FE[$i]}" \
-        --output "$CACHE_DIR/traj_${win}.pkl"
+        --output "$CACHE_DIR/traj_${win}.pkl" &
 done
 
-# Multi-task
-echo "[MT] 軌跡抽出中..."
+# Multi-task も並列
+echo "[MT] 軌跡抽出開始..."
 uv run python scripts/train/extract_trajectories.py \
     --reviews "$REVIEWS" \
     --raw-json "${RAW_JSON[@]}" \
@@ -61,7 +61,10 @@ uv run python scripts/train/extract_trajectories.py \
     --future-window-start 0 \
     --future-window-end 3 \
     --multitask \
-    --output "$CACHE_DIR/traj_mt_0-3.pkl"
+    --output "$CACHE_DIR/traj_mt_0-3.pkl" &
+
+echo "5プロセス起動完了。完了を待機中..."
+wait
 
 echo ""
 echo "=== 軌跡キャッシュ作成完了 ==="
