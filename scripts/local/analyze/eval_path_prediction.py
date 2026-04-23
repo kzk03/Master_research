@@ -1,9 +1,16 @@
 """
 パスごとの貢献者数予測評価スクリプト（Step 1）
 
-特徴:
-  - joblib による並列化（RF推論, RF_Dir推論）
-  - GPU 対応（--device cuda）
+時点 T で各ディレクトリの Δ ヶ月後の貢献者数を予測し、
+実際の貢献者数と比較する。
+
+手法:
+  - Variant A（単純合計）: Σ continuation_prob_d
+  - Variant B（親和度加重）: Σ continuation_prob_d × affinity(d, D)
+
+ベースライン:
+  - Naive: T 時点の貢献者数がそのまま続くと仮定
+  - Linear: 過去の貢献者数推移から線形外挿
 
 使い方:
     python scripts/analyze/eval_path_prediction.py \
@@ -12,9 +19,7 @@
         --irl-model outputs/cross_temporal_v39/train_0-3m/irl_model.pt \
         --prediction-time 2014-01-01 \
         --delta-months 3 \
-        --window-days 180 \
-        --device cuda \
-        --n-jobs -1
+        --window-days 180
 """
 
 from __future__ import annotations
@@ -28,7 +33,6 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
-from joblib import Parallel, delayed
 ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
@@ -236,7 +240,6 @@ def baseline_rf(
     target_dirs: Dict[str, Set[str]],
     future_start_months: int = 0,
     rf_train_end: Optional[datetime] = None,
-    n_jobs: int = -1,
 ) -> Tuple[Dict[str, float], Dict[str, float]]:
     """
     RF ベースライン: 卒論の RF で個人の continuation_prob を予測し、
@@ -255,22 +258,18 @@ def baseline_rf(
 
     feature_start = prediction_time - pd.Timedelta(days=window_days)
 
-    # 全開発者の continuation_prob を RF で推論（並列）
+    # 全開発者の continuation_prob を RF で推論
     all_devs = set()
     for devs in target_dirs.values():
         all_devs.update(devs)
 
-    def _rf_predict_one(email):
+    rf_probs: Dict[str, float] = {}
+    for email in all_devs:
         feat_dict = extract_common_features(
             df, email, feature_start, prediction_time, normalize=False,
         )
         X = np.array([[feat_dict[f] for f in FEATURE_NAMES]], dtype=np.float64)
-        return email, float(clf.predict_proba(X)[0, 1])
-
-    results = Parallel(n_jobs=n_jobs, backend="loky")(
-        delayed(_rf_predict_one)(email) for email in all_devs
-    )
-    rf_probs: Dict[str, float] = dict(results)
+        rf_probs[email] = float(clf.predict_proba(X)[0, 1])
 
     logger.info(
         f"RF: {len(rf_probs)} devs 推論完了, "
@@ -516,9 +515,7 @@ def parse_args() -> argparse.Namespace:
                    help="RFの訓練ラベル窓の開始オフセット（未指定時は--future-start-monthsと同じ）")
     p.add_argument("--rf-train-end", type=str, default=None,
                    help="RF_Dirの学習ラベル基準日（IRL train_endと揃える）")
-    p.add_argument("--device", type=str, default="cuda")
-    p.add_argument("--n-jobs", type=int, default=-1,
-                   help="joblib 並列数（-1=全コア）")
+    p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument(
         "--multi-timepoint",
@@ -541,7 +538,6 @@ def evaluate_single_timepoint(
     future_start_months: int = 0,
     rf_train_end: Optional[datetime] = None,
     rf_future_start_months: Optional[int] = None,
-    n_jobs: int = -1,
 ) -> Dict[str, Dict[str, float]]:
     """単一時点の評価を実行し、全手法の結果を返す。"""
     # RF訓練ラベル窓（未指定なら評価窓と同じ = 従来動作）
@@ -603,7 +599,6 @@ def evaluate_single_timepoint(
         df, prediction_time, delta_months, window_days, dir_developers,
         future_start_months=rf_future_start_months,
         rf_train_end=rf_train_end,
-        n_jobs=n_jobs,
     )
 
     # 5. Ground truth
@@ -660,23 +655,18 @@ def evaluate_single_timepoint(
             df=df,
             history_start=dir_history_start,
         )
-        # (dev, dir) ペアをフラット化して一括推論
-        head_index = future_start_months // 3
-        pairs = [(d, dev) for d, devs in dir_developers.items() for dev in devs]
-        logger.info(f"IRL_Dir: {len(pairs)} ペアを推論...")
-
-        pair_results = []
-        for d, dev in pairs:
-            prob = dir_predictor.predict_developer_directory(
-                dev, d, prediction_time, path_extractor=path_extractor,
-                head_index=head_index,
-            )
-            pair_results.append((d, dev, prob))
-
         irl_dir_agg: Dict[str, float] = {}
-        for d, dev, prob in pair_results:
-            irl_dir_probs.setdefault(d, {})[dev] = prob
-            irl_dir_agg[d] = irl_dir_agg.get(d, 0.0) + prob
+        for d, devs in dir_developers.items():
+            dir_sum = 0.0
+            for dev in devs:
+                head_index = future_start_months // 3
+                prob = dir_predictor.predict_developer_directory(
+                    dev, d, prediction_time, path_extractor=path_extractor,
+                    head_index=head_index,
+                )
+                irl_dir_probs.setdefault(d, {})[dev] = prob
+                dir_sum += prob
+            irl_dir_agg[d] = dir_sum
 
         methods["IRL_Dir"] = irl_dir_agg
         metrics = compute_metrics(irl_dir_agg, actual, "IRL_Dir")
@@ -764,7 +754,7 @@ def evaluate_single_timepoint(
         clf_dir = RFC(n_estimators=100, class_weight="balanced", random_state=42, n_jobs=-1)
         clf_dir.fit(X_train_dir, y_train_dir)
 
-        # 推論: 各 (dev, dir) ペアの continuation_prob（並列）
+        # 推論: 各 (dev, dir) ペアの continuation_prob
         from review_predictor.IRL.features.common_features import FEATURE_NAMES_WITH_PATH
         from review_predictor.IRL.features.path_features import PATH_FEATURE_NAMES
 
@@ -772,28 +762,22 @@ def evaluate_single_timepoint(
         rf_dir_agg: Dict[str, float] = {}
         rf_dir_dev_probs: Dict[str, Dict[str, float]] = {}
 
-        rf_dir_pairs = [(d, dev) for d, devs in dir_developers.items() for dev in devs]
-        logger.info(f"RF_Dir: {len(rf_dir_pairs)} ペアを並列推論 (n_jobs={n_jobs})...")
-
-        def _rf_dir_predict_one(d, dev):
-            common_feats = extract_common_features(
-                df, dev, feature_start, prediction_time, normalize=False,
-            )
-            pf = path_extractor.compute(dev, frozenset({d}), prediction_time)
-            path_feats = {
-                name: float(val) for name, val in zip(PATH_FEATURE_NAMES, pf)
-            }
-            feat_row = {**common_feats, **path_feats}
-            X = np.array([[feat_row.get(f, 0.0) for f in FEATURE_NAMES_WITH_PATH]], dtype=np.float64)
-            prob = float(clf_dir.predict_proba(X)[0, 1])
-            return d, dev, prob
-
-        rf_dir_results = Parallel(n_jobs=n_jobs, backend="loky")(
-            delayed(_rf_dir_predict_one)(d, dev) for d, dev in rf_dir_pairs
-        )
-        for d, dev, prob in rf_dir_results:
-            rf_dir_dev_probs.setdefault(d, {})[dev] = prob
-            rf_dir_agg[d] = rf_dir_agg.get(d, 0.0) + prob
+        for d, devs in dir_developers.items():
+            dir_sum = 0.0
+            for dev in devs:
+                common_feats = extract_common_features(
+                    df, dev, feature_start, prediction_time, normalize=False,
+                )
+                pf = path_extractor.compute(dev, frozenset({d}), prediction_time)
+                path_feats = {
+                    name: float(val) for name, val in zip(PATH_FEATURE_NAMES, pf)
+                }
+                feat_row = {**common_feats, **path_feats}
+                X = np.array([[feat_row.get(f, 0.0) for f in FEATURE_NAMES_WITH_PATH]], dtype=np.float64)
+                prob = float(clf_dir.predict_proba(X)[0, 1])
+                rf_dir_dev_probs.setdefault(d, {})[dev] = prob
+                dir_sum += prob
+            rf_dir_agg[d] = dir_sum
 
         methods["RF_Dir"] = rf_dir_agg
         metrics = compute_metrics(rf_dir_agg, actual, "RF_Dir")
@@ -1014,7 +998,6 @@ def main() -> None:
             future_start_months=args.future_start_months,
             rf_train_end=rf_train_end_dt,
             rf_future_start_months=rf_fsm,
-            n_jobs=args.n_jobs,
         )
 
         # CSV 保存

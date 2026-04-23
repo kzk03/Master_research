@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """
 ============================================================
-レビュー承諾予測 - 逆強化学習（IRL）モデルの訓練・評価 [サーバ版]
+レビュー承諾予測 - 逆強化学習（IRL）モデルの訓練・評価
 ============================================================
-ローカル版との差分:
-  - extract_directory_level_trajectories を joblib で並列化
-  - GPU 自動検出（cuda available なら使用）
 
 【プログラムの目的】
 レビュアーが将来的にレビュー依頼を承諾し続けるかどうかを予測します。
@@ -507,204 +504,6 @@ def extract_review_acceptance_trajectories(
     return trajectories
 
 
-def _process_one_reviewer(
-    reviewer,
-    df,
-    history_df,
-    path_extractor,
-    train_start,
-    train_end,
-    future_window_start_months,
-    future_window_end_months,
-    reviewer_col,
-    date_col,
-    label_col,
-    dirs_column,
-    multitask,
-):
-    """1レビュアー分の軌跡を抽出する（並列処理用ワーカー関数）。"""
-    history_start = train_start
-    history_end = train_end
-
-    reviewer_history = history_df[history_df[reviewer_col] == reviewer]
-
-    reviewer_dirs = set()
-    for dirs in reviewer_history[dirs_column]:
-        if dirs:
-            reviewer_dirs.update(d for d in dirs if d != '.')
-
-    results = []
-    positive_count = 0
-    negative_count = 0
-    skipped_count = 0
-
-    MULTITASK_WINDOWS = [(0, 3), (3, 6), (6, 9), (9, 12)]
-
-    for directory in reviewer_dirs:
-        label_start = train_end + pd.DateOffset(months=future_window_start_months)
-        label_end = train_end + pd.DateOffset(months=future_window_end_months)
-
-        label_df = df[
-            (df[date_col] >= label_start) &
-            (df[date_col] < label_end) &
-            (df[reviewer_col] == reviewer) &
-            (df[dirs_column].map(lambda ds: directory in ds if ds else False))
-        ]
-
-        if len(label_df) == 0:
-            future_acceptance = False
-            sample_weight = 0.5
-        else:
-            accepted = label_df[label_df[label_col] == 1]
-            future_acceptance = len(accepted) > 0
-            sample_weight = 1.0
-
-        if future_acceptance:
-            positive_count += 1
-        else:
-            negative_count += 1
-
-        history_months = pd.date_range(start=history_start, end=history_end, freq='MS')
-
-        step_labels = []
-        step_labels_per_window = {"0-3": [], "3-6": [], "6-9": [], "9-12": []} if multitask else None
-        monthly_activity_histories = []
-        step_context_dates = []
-        step_total_project_reviews = []
-        path_features_per_step = []
-
-        for month_start in history_months[:-1]:
-            month_end = month_start + pd.DateOffset(months=1)
-
-            future_start = month_end + pd.DateOffset(months=future_window_start_months)
-            future_end = month_end + pd.DateOffset(months=future_window_end_months)
-
-            if future_end > train_end:
-                future_end = train_end
-            if future_start >= train_end:
-                continue
-
-            month_future_df = df[
-                (df[date_col] >= future_start) &
-                (df[date_col] < future_end) &
-                (df[reviewer_col] == reviewer) &
-                (df[dirs_column].map(lambda ds: directory in ds if ds else False))
-            ]
-
-            if len(month_future_df) == 0:
-                month_label = 0
-            else:
-                month_accepted = month_future_df[month_future_df[label_col] == 1]
-                month_label = 1 if len(month_accepted) > 0 else 0
-
-            step_labels.append(month_label)
-
-            if multitask:
-                for fw_s, fw_e in MULTITASK_WINDOWS:
-                    mt_future_start = month_end + pd.DateOffset(months=fw_s)
-                    mt_future_end = month_end + pd.DateOffset(months=fw_e)
-                    if mt_future_end > train_end:
-                        mt_future_end = train_end
-                    if mt_future_start >= train_end:
-                        step_labels_per_window[f"{fw_s}-{fw_e}"].append(0)
-                        continue
-                    mt_df = df[
-                        (df[date_col] >= mt_future_start) &
-                        (df[date_col] < mt_future_end) &
-                        (df[reviewer_col] == reviewer) &
-                        (df[dirs_column].map(lambda ds: directory in ds if ds else False))
-                    ]
-                    if len(mt_df) == 0:
-                        mt_label = 0
-                    else:
-                        mt_label = 1 if len(mt_df[mt_df[label_col] == 1]) > 0 else 0
-                    step_labels_per_window[f"{fw_s}-{fw_e}"].append(mt_label)
-            step_context_dates.append(month_end)
-
-            total_proj = len(df[(df[date_col] >= history_start) & (df[date_col] < month_end)])
-            step_total_project_reviews.append(total_proj)
-
-            month_history = reviewer_history[reviewer_history[date_col] < month_end]
-            monthly_activities = []
-            for _, row in month_history.iterrows():
-                monthly_activities.append({
-                    'timestamp': row[date_col],
-                    'action_type': 'review',
-                    'project': row.get('project', 'unknown'),
-                    'project_id': row.get('project', 'unknown'),
-                    'request_time': row.get('request_time', row[date_col]),
-                    'response_time': row.get('first_response_time'),
-                    'accepted': row.get(label_col, 0) == 1,
-                    'owner_email': row.get('owner_email', ''),
-                    'is_cross_project': row.get('is_cross_project', False),
-                    'files_changed': row.get('change_files_count', 0),
-                    'lines_added': row.get('change_insertions', 0),
-                    'lines_deleted': row.get('change_deletions', 0),
-                })
-            authored_history = df[
-                (df['owner_email'] == reviewer) &
-                (df[date_col] >= history_start) &
-                (df[date_col] < month_end)
-            ]
-            for _, row in authored_history.iterrows():
-                monthly_activities.append({
-                    'action_type': 'authored',
-                    'timestamp': row[date_col],
-                    'owner_email': reviewer,
-                    'reviewer_email': row.get('email', row.get('reviewer_email', '')),
-                    'files_changed': row.get('change_files_count', 0),
-                    'lines_added': row.get('change_insertions', 0),
-                    'lines_deleted': row.get('change_deletions', 0),
-                })
-            monthly_activity_histories.append(monthly_activities)
-
-            pf = path_extractor.compute(
-                reviewer, frozenset({directory}), month_end.to_pydatetime()
-            )
-            path_features_per_step.append(pf)
-
-        if not step_labels:
-            skipped_count += 1
-            continue
-
-        developer_info = {
-            'developer_id': reviewer,
-            'email': reviewer,
-            'first_seen': reviewer_history[date_col].min(),
-            'changes_reviewed': len(reviewer_history[reviewer_history[label_col] == 1]),
-            'requests_received': len(reviewer_history),
-            'acceptance_rate': (
-                len(reviewer_history[reviewer_history[label_col] == 1]) / len(reviewer_history)
-                if len(reviewer_history) > 0 else 0.0
-            ),
-            'projects': (
-                reviewer_history['project'].unique().tolist()
-                if 'project' in reviewer_history.columns else []
-            ),
-        }
-
-        trajectory = {
-            'developer_info': developer_info,
-            'directory': directory,
-            'activity_history': [],
-            'monthly_activity_histories': monthly_activity_histories,
-            'step_context_dates': step_context_dates,
-            'step_total_project_reviews': step_total_project_reviews,
-            'path_features_per_step': path_features_per_step,
-            'context_date': train_end,
-            'step_labels': step_labels,
-            'seq_len': len(step_labels),
-            'reviewer': reviewer,
-            'future_acceptance': future_acceptance,
-            'sample_weight': sample_weight,
-        }
-        if step_labels_per_window is not None:
-            trajectory['step_labels_per_window'] = step_labels_per_window
-        results.append(trajectory)
-
-    return results, positive_count, negative_count, skipped_count
-
-
 def extract_directory_level_trajectories(
     df: pd.DataFrame,
     train_start: pd.Timestamp,
@@ -717,55 +516,226 @@ def extract_directory_level_trajectories(
     label_col: str = 'label',
     dirs_column: str = 'dirs',
     multitask: bool = False,
-    n_jobs: int = -1,
 ) -> List[Dict[str, Any]]:
     """
-    ディレクトリ単位の軌跡を抽出する。[サーバ版: joblib 並列化]
+    ディレクトリ単位の軌跡を抽出する。
 
     1サンプル = (開発者, ディレクトリ) ペア。
     ラベルは「その開発者がそのディレクトリに将来も貢献するか」。
     特徴量は common_features 25次元 + path_features 3次元 = 28次元。
+
+    Args:
+        df: 'dirs' 列を持つ DataFrame（attach_dirs_to_df 済み）
+        path_extractor: PathFeatureExtractor インスタンス
     """
-    from joblib import Parallel, delayed
     import numpy as np
 
     logger.info("=" * 80)
-    logger.info("ディレクトリ単位の軌跡抽出を開始 [サーバ版: 並列化]")
+    logger.info("ディレクトリ単位の軌跡抽出を開始")
     logger.info(f"訓練期間: {train_start} ～ {train_end}")
     logger.info(f"将来窓: {future_window_start_months}～{future_window_end_months}ヶ月")
-    logger.info(f"並列数: n_jobs={n_jobs}")
     logger.info("=" * 80)
 
     history_start = train_start
     history_end = train_end
 
+    # 特徴量計算期間のデータ
     history_df = df[
         (df[date_col] >= history_start) & (df[date_col] < history_end)
     ]
     active_reviewers = history_df[reviewer_col].unique()
     logger.info(f"特徴量計算期間内のレビュアー数: {len(active_reviewers)}")
 
-    # レビュアー単位で並列処理
-    batch_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=10)(
-        delayed(_process_one_reviewer)(
-            reviewer, df, history_df, path_extractor,
-            train_start, train_end,
-            future_window_start_months, future_window_end_months,
-            reviewer_col, date_col, label_col, dirs_column, multitask,
-        )
-        for reviewer in active_reviewers
-    )
-
-    # 結果を集約
+    # 各レビュアーが関わったディレクトリを列挙
     trajectories = []
     positive_count = 0
     negative_count = 0
     skipped_count = 0
-    for trajs, pos, neg, skip in batch_results:
-        trajectories.extend(trajs)
-        positive_count += pos
-        negative_count += neg
-        skipped_count += skip
+
+    for ri, reviewer in enumerate(active_reviewers):
+        if (ri + 1) % 50 == 0 or ri == 0:
+            logger.info(f"  軌跡抽出: {ri + 1}/{len(active_reviewers)} レビュアー処理中...")
+        reviewer_history = history_df[history_df[reviewer_col] == reviewer]
+
+        # このレビュアーが触ったディレクトリ
+        reviewer_dirs = set()
+        for dirs in reviewer_history[dirs_column]:
+            if dirs:
+                reviewer_dirs.update(d for d in dirs if d != '.')
+
+        for directory in reviewer_dirs:
+            # ── ラベル計算 ──
+            label_start = train_end + pd.DateOffset(months=future_window_start_months)
+            label_end = train_end + pd.DateOffset(months=future_window_end_months)
+
+            # ディレクトリ D での将来のレビュー依頼
+            label_df = df[
+                (df[date_col] >= label_start) &
+                (df[date_col] < label_end) &
+                (df[reviewer_col] == reviewer) &
+                (df[dirs_column].map(lambda ds: directory in ds if ds else False))
+            ]
+
+            if len(label_df) == 0:
+                future_acceptance = False
+                sample_weight = 0.5
+            else:
+                accepted = label_df[label_df[label_col] == 1]
+                future_acceptance = len(accepted) > 0
+                sample_weight = 1.0
+
+            if future_acceptance:
+                positive_count += 1
+            else:
+                negative_count += 1
+
+            # ── 月次シーケンス構築 ──
+            history_months = pd.date_range(start=history_start, end=history_end, freq='MS')
+
+            step_labels = []
+            step_labels_per_window = {"0-3": [], "3-6": [], "6-9": [], "9-12": []} if multitask else None
+            monthly_activity_histories = []
+            step_context_dates = []
+            step_total_project_reviews = []
+            path_features_per_step = []
+
+            # Multi-task: 最も広い窓（9-12m）で future_start が train_end 内に収まるかで判定
+            MULTITASK_WINDOWS = [(0, 3), (3, 6), (6, 9), (9, 12)]
+
+            for month_start in history_months[:-1]:
+                month_end = month_start + pd.DateOffset(months=1)
+
+                future_start = month_end + pd.DateOffset(months=future_window_start_months)
+                future_end = month_end + pd.DateOffset(months=future_window_end_months)
+
+                if future_end > train_end:
+                    future_end = train_end
+                if future_start >= train_end:
+                    continue
+
+                # ディレクトリ D でのラベル（primary window）
+                month_future_df = df[
+                    (df[date_col] >= future_start) &
+                    (df[date_col] < future_end) &
+                    (df[reviewer_col] == reviewer) &
+                    (df[dirs_column].map(lambda ds: directory in ds if ds else False))
+                ]
+
+                if len(month_future_df) == 0:
+                    month_label = 0
+                else:
+                    month_accepted = month_future_df[month_future_df[label_col] == 1]
+                    month_label = 1 if len(month_accepted) > 0 else 0
+
+                step_labels.append(month_label)
+
+                # Multi-task: 全4窓のラベルも計算
+                if multitask:
+                    for fw_s, fw_e in MULTITASK_WINDOWS:
+                        mt_future_start = month_end + pd.DateOffset(months=fw_s)
+                        mt_future_end = month_end + pd.DateOffset(months=fw_e)
+                        if mt_future_end > train_end:
+                            mt_future_end = train_end
+                        if mt_future_start >= train_end:
+                            step_labels_per_window[f"{fw_s}-{fw_e}"].append(0)
+                            continue
+                        mt_df = df[
+                            (df[date_col] >= mt_future_start) &
+                            (df[date_col] < mt_future_end) &
+                            (df[reviewer_col] == reviewer) &
+                            (df[dirs_column].map(lambda ds: directory in ds if ds else False))
+                        ]
+                        if len(mt_df) == 0:
+                            mt_label = 0
+                        else:
+                            mt_label = 1 if len(mt_df[mt_df[label_col] == 1]) > 0 else 0
+                        step_labels_per_window[f"{fw_s}-{fw_e}"].append(mt_label)
+                step_context_dates.append(month_end)
+
+                total_proj = len(df[(df[date_col] >= history_start) & (df[date_col] < month_end)])
+                step_total_project_reviews.append(total_proj)
+
+                # 活動履歴（全体 — common_features 計算用）
+                month_history = reviewer_history[reviewer_history[date_col] < month_end]
+                monthly_activities = []
+                for _, row in month_history.iterrows():
+                    monthly_activities.append({
+                        'timestamp': row[date_col],
+                        'action_type': 'review',
+                        'project': row.get('project', 'unknown'),
+                        'project_id': row.get('project', 'unknown'),
+                        'request_time': row.get('request_time', row[date_col]),
+                        'response_time': row.get('first_response_time'),
+                        'accepted': row.get(label_col, 0) == 1,
+                        'owner_email': row.get('owner_email', ''),
+                        'is_cross_project': row.get('is_cross_project', False),
+                        'files_changed': row.get('change_files_count', 0),
+                        'lines_added': row.get('change_insertions', 0),
+                        'lines_deleted': row.get('change_deletions', 0),
+                    })
+                # authored 履歴
+                authored_history = df[
+                    (df['owner_email'] == reviewer) &
+                    (df[date_col] >= history_start) &
+                    (df[date_col] < month_end)
+                ]
+                for _, row in authored_history.iterrows():
+                    monthly_activities.append({
+                        'action_type': 'authored',
+                        'timestamp': row[date_col],
+                        'owner_email': reviewer,
+                        'reviewer_email': row.get('email', row.get('reviewer_email', '')),
+                        'files_changed': row.get('change_files_count', 0),
+                        'lines_added': row.get('change_insertions', 0),
+                        'lines_deleted': row.get('change_deletions', 0),
+                    })
+                monthly_activity_histories.append(monthly_activities)
+
+                # パス特徴量（ディレクトリ固有）
+                pf = path_extractor.compute(
+                    reviewer, frozenset({directory}), month_end.to_pydatetime()
+                )
+                path_features_per_step.append(pf)
+
+            if not step_labels:
+                skipped_count += 1
+                continue
+
+            # 開発者情報
+            developer_info = {
+                'developer_id': reviewer,
+                'email': reviewer,
+                'first_seen': reviewer_history[date_col].min(),
+                'changes_reviewed': len(reviewer_history[reviewer_history[label_col] == 1]),
+                'requests_received': len(reviewer_history),
+                'acceptance_rate': (
+                    len(reviewer_history[reviewer_history[label_col] == 1]) / len(reviewer_history)
+                    if len(reviewer_history) > 0 else 0.0
+                ),
+                'projects': (
+                    reviewer_history['project'].unique().tolist()
+                    if 'project' in reviewer_history.columns else []
+                ),
+            }
+
+            trajectory = {
+                'developer_info': developer_info,
+                'directory': directory,
+                'activity_history': [],  # 省略（学習には monthly_activity_histories を使う）
+                'monthly_activity_histories': monthly_activity_histories,
+                'step_context_dates': step_context_dates,
+                'step_total_project_reviews': step_total_project_reviews,
+                'path_features_per_step': path_features_per_step,
+                'context_date': train_end,
+                'step_labels': step_labels,
+                'seq_len': len(step_labels),
+                'reviewer': reviewer,
+                'future_acceptance': future_acceptance,
+                'sample_weight': sample_weight,
+            }
+            if step_labels_per_window is not None:
+                trajectory['step_labels_per_window'] = step_labels_per_window
+            trajectories.append(trajectory)
 
     logger.info("=" * 80)
     logger.info(f"ディレクトリ単位軌跡抽出完了: {len(trajectories)} ペア")
@@ -1275,7 +1245,6 @@ def main():
                 future_window_start_months=args.future_window_start,
                 future_window_end_months=args.future_window_end,
                 multitask=_multitask,
-                n_jobs=-1,
             )
             state_dim = 23  # 20 + path(3)
 

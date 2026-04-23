@@ -1,15 +1,24 @@
 #!/bin/bash
-# 1つのバリアントに対して10パターン（train<=eval制約）を実行
-# 訓練・評価ともに並列実行
+# [サーバ用] 1つのバリアントに対して学習+評価10パターンを実行
+# ローカル版との差分:
+#   - GPU 使用（--device cuda, CUDA_VISIBLE_DEVICES）
+#   - 評価も --device cuda
+#   - MT バリアント非対応（non-MT のみ）
 #
 # 使い方:
-#   bash scripts/run_variant_single.sh <variant_id> <variant_name> [outbase]
+#   bash scripts/run_variant_single.sh <variant_id> <variant_name> [outbase] [gpu_id]
+#
+# 例:
+#   bash scripts/run_variant_single.sh 0 lstm_baseline outputs/variant_comparison_server 0
 
 set -e
 
-VTYPE="${1:?Usage: $0 <variant_id> <variant_name> [outbase]}"
-VNAME="${2:?Usage: $0 <variant_id> <variant_name> [outbase]}"
-OUTBASE="${3:-outputs/variant_comparison_combined}"
+VTYPE="${1:?Usage: $0 <variant_id> <variant_name> [outbase] [gpu_id]}"
+VNAME="${2:?Usage: $0 <variant_id> <variant_name> [outbase] [gpu_id]}"
+OUTBASE="${3:-outputs/variant_comparison_server}"
+GPU_ID="${4:-0}"
+
+export CUDA_VISIBLE_DEVICES="$GPU_ID"
 
 REVIEWS="data/combined_raw.csv"
 RAW_JSON=(
@@ -62,24 +71,32 @@ run_eval() {
         --rf-future-start-months "$train_fs_val" \
         --irl-dir-model "$model_path" \
         --rf-train-end "$TRAIN_END" \
+        --device cuda \
+        --n-jobs 4 \
         --output-dir "$eval_dir"
     echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
 }
 
+# 評価並列数（同時にバックグラウンドで走る評価プロセス数）
+EVAL_PARALLEL=4
+
 echo ""
 echo "============================================================"
-echo "  バリアント $VTYPE: $VNAME"
+echo "  [サーバ] バリアント $VTYPE: $VNAME (GPU=$GPU_ID)"
 echo "============================================================"
 
-if [ "$VTYPE" -ge 3 ]; then
-    # ── Multi-task: 1モデル訓練 ──
-    model_dir="$OUTBASE/$VNAME/train_all"
+# ── Non-multi-task: 4モデル逐次訓練（GPU共有のため） ──
+for i in 0 1 2 3; do
+    win="${TRAIN_WINDOWS[$i]}"
+    fs="${TRAIN_FS[$i]}"
+    fe="${TRAIN_FE[$i]}"
+    model_dir="$OUTBASE/$VNAME/train_${win}m"
     mkdir -p "$model_dir"
 
     if [ -f "$model_dir/irl_model.pt" ]; then
-        echo "[$VNAME] 学習スキップ（学習済み）"
+        echo "[$VNAME train_${win}m] 学習スキップ（学習済み）"
     else
-        echo "[$VNAME] Multi-task 学習開始..."
+        echo "[$VNAME train_${win}m] 学習開始 (future_window=${fs}-${fe}m, GPU=$GPU_ID)..."
         uv run python scripts/train/train_model.py \
             --directory-level \
             --model-type "$VTYPE" \
@@ -89,78 +106,41 @@ if [ "$VTYPE" -ge 3 ]; then
             --patience "$PATIENCE" \
             --train-start "$TRAIN_START" \
             --train-end "$TRAIN_END" \
-            --future-window-start 0 \
-            --future-window-end 3 \
-            --trajectories-cache "$CACHE_DIR/traj_mt_0-3.pkl" \
+            --future-window-start "$fs" \
+            --future-window-end "$fe" \
+            --trajectories-cache "$CACHE_DIR/traj_${win}.pkl" \
             --output "$model_dir"
-        echo "[$VNAME] 学習完了"
+        echo "[$VNAME train_${win}m] 学習完了"
+    fi
+done
+
+# ── 評価: 最大 EVAL_PARALLEL 個ずつ並列実行 ──
+running=0
+for ti in 0 1 2 3; do
+    train_win="${TRAIN_WINDOWS[$ti]}"
+    model_path="$OUTBASE/$VNAME/train_${train_win}m/irl_model.pt"
+
+    if [ ! -f "$model_path" ]; then
+        echo "[$VNAME train_${train_win}m] モデルが見つからない、スキップ"
+        continue
     fi
 
-    # 評価: 10パターン並列
-    model_path="$model_dir/irl_model.pt"
-    for ti in 0 1 2 3; do
-        for ei in $(seq $ti 3); do
-            train_win="${TRAIN_WINDOWS[$ti]}"
-            eval_win="${TRAIN_WINDOWS[$ei]}"
-            eval_fs="${TRAIN_FS[$ei]}"
-            train_fs_val="${TRAIN_FS[$ti]}"
-            run_eval "$model_path" "$train_win" "$eval_win" "$eval_fs" "$train_fs_val" &
-        done
-    done
-    echo "[$VNAME] 評価10パターン並列起動、完了待ち..."
-    wait
-
-else
-    # ── Non-multi-task: 4モデル並列訓練 ──
-    for i in 0 1 2 3; do
-        win="${TRAIN_WINDOWS[$i]}"
-        fs="${TRAIN_FS[$i]}"
-        fe="${TRAIN_FE[$i]}"
-        model_dir="$OUTBASE/$VNAME/train_${win}m"
-        mkdir -p "$model_dir"
-
-        if [ -f "$model_dir/irl_model.pt" ]; then
-            echo "[$VNAME train_${win}m] 学習スキップ（学習済み）"
-        else
-            echo "[$VNAME train_${win}m] 学習開始 (future_window=${fs}-${fe}m)..."
-            uv run python scripts/train/train_model.py \
-                --directory-level \
-                --model-type "$VTYPE" \
-                --raw-json "${RAW_JSON[@]}" \
-                --reviews "$REVIEWS" \
-                --epochs "$EPOCHS" \
-                --patience "$PATIENCE" \
-                --train-start "$TRAIN_START" \
-                --train-end "$TRAIN_END" \
-                --future-window-start "$fs" \
-                --future-window-end "$fe" \
-                --trajectories-cache "$CACHE_DIR/traj_${win}.pkl" \
-                --output "$model_dir" &
+    for ei in $(seq $ti 3); do
+        eval_win="${TRAIN_WINDOWS[$ei]}"
+        eval_fs="${TRAIN_FS[$ei]}"
+        train_fs_val="${TRAIN_FS[$ti]}"
+        run_eval "$model_path" "$train_win" "$eval_win" "$eval_fs" "$train_fs_val" &
+        running=$((running + 1))
+        if [ "$running" -ge "$EVAL_PARALLEL" ]; then
+            wait
+            running=0
         fi
     done
-    echo "[$VNAME] 訓練4窓並列起動、完了待ち..."
-    wait
-
-    # 評価: 10パターン並列
-    for ti in 0 1 2 3; do
-        train_win="${TRAIN_WINDOWS[$ti]}"
-        model_path="$OUTBASE/$VNAME/train_${train_win}m/irl_model.pt"
-
-        if [ ! -f "$model_path" ]; then
-            echo "[$VNAME train_${train_win}m] モデルが見つからない、スキップ"
-            continue
-        fi
-
-        for ei in $(seq $ti 3); do
-            eval_win="${TRAIN_WINDOWS[$ei]}"
-            eval_fs="${TRAIN_FS[$ei]}"
-            train_fs_val="${TRAIN_FS[$ti]}"
-            run_eval "$model_path" "$train_win" "$eval_win" "$eval_fs" "$train_fs_val" &
-        done
-    done
-    echo "[$VNAME] 評価10パターン並列起動、完了待ち..."
+done
+if [ "$running" -gt 0 ]; then
     wait
 fi
+echo "[$VNAME] 評価全パターン完了"
 
 echo ""
 echo "[$VNAME] 全パターン完了"

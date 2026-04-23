@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-軌跡抽出のみを行い、pickle でキャッシュする。（joblib 並列化対応）
+軌跡抽出のみを行い、pickle でキャッシュする。
 
 使い方:
     uv run python scripts/train/extract_trajectories.py \
@@ -8,8 +8,16 @@
         --raw-json data/raw_json/openstack__*.json \
         --train-start 2019-01-01 --train-end 2022-01-01 \
         --future-window-start 0 --future-window-end 3 \
-        --n-jobs -1 \
         --output trajectory_cache/traj_0-3.pkl
+
+    # Multi-task
+    uv run python scripts/train/extract_trajectories.py \
+        --reviews data/combined_raw.csv \
+        --raw-json data/raw_json/openstack__*.json \
+        --train-start 2019-01-01 --train-end 2022-01-01 \
+        --future-window-start 0 --future-window-end 3 \
+        --multitask \
+        --output trajectory_cache/traj_mt_0-3.pkl
 """
 
 import argparse
@@ -36,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="軌跡抽出 & キャッシュ保存 [サーバ版]")
+    parser = argparse.ArgumentParser(description="軌跡抽出 & キャッシュ保存")
     parser.add_argument("--reviews", type=str, required=True)
     parser.add_argument("--raw-json", type=str, nargs="+", required=True)
     parser.add_argument("--train-start", type=str, default="2019-01-01")
@@ -44,8 +52,6 @@ def main():
     parser.add_argument("--future-window-start", type=int, required=True)
     parser.add_argument("--future-window-end", type=int, required=True)
     parser.add_argument("--multitask", action="store_true")
-    parser.add_argument("--n-jobs", type=int, default=-1,
-                        help="joblib 並列数（-1=全コア）")
     parser.add_argument("--output", type=str, required=True, help="出力 .pkl パス")
     args = parser.parse_args()
 
@@ -83,8 +89,8 @@ def main():
     })
     path_extractor = PathFeatureExtractor(df_for_path, window_days=180)
 
-    # 軌跡抽出（並列化）
-    logger.info(f"軌跡抽出開始 (multitask={args.multitask}, n_jobs={args.n_jobs})")
+    # 軌跡抽出
+    logger.info(f"軌跡抽出開始 (multitask={args.multitask})")
     trajectories = extract_directory_level_trajectories(
         df,
         train_start=train_start,
@@ -93,7 +99,6 @@ def main():
         future_window_start_months=args.future_window_start,
         future_window_end_months=args.future_window_end,
         multitask=args.multitask,
-        n_jobs=args.n_jobs,
     )
 
     if not trajectories:
