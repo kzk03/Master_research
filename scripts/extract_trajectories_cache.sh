@@ -3,14 +3,13 @@
 # MT を除外し、non-MT 4窓を並列実行
 #
 # 出力:
-#   $OUTBASE/trajectory_cache/traj_0-3.pkl
-#   $OUTBASE/trajectory_cache/traj_3-6.pkl
-#   $OUTBASE/trajectory_cache/traj_6-9.pkl
-#   $OUTBASE/trajectory_cache/traj_9-12.pkl
+#   outputs/trajectory_cache/traj_0-3.pkl
+#   outputs/trajectory_cache/traj_3-6.pkl
+#   outputs/trajectory_cache/traj_6-9.pkl
+#   outputs/trajectory_cache/traj_9-12.pkl
 
 set -e
 
-OUTBASE="${1:-outputs/variant_comparison_server}"
 REVIEWS="data/combined_raw.csv"
 RAW_JSON=(
     data/raw_json/openstack__nova.json
@@ -27,7 +26,7 @@ RAW_JSON=(
 TRAIN_START="2019-01-01"
 TRAIN_END="2022-01-01"
 
-CACHE_DIR="$OUTBASE/trajectory_cache"
+CACHE_DIR="outputs/trajectory_cache"
 mkdir -p "$CACHE_DIR"
 
 WINDOWS=("0-3" "3-6" "6-9" "9-12")

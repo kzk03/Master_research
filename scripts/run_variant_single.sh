@@ -15,7 +15,6 @@ set -e
 
 VTYPE="${1:?Usage: $0 <variant_id> <variant_name> [outbase] [gpu_id]}"
 VNAME="${2:?Usage: $0 <variant_id> <variant_name> [outbase] [gpu_id]}"
-OUTBASE="${3:-outputs/variant_comparison_server}"
 GPU_ID="${4:-0}"
 
 export CUDA_VISIBLE_DEVICES="$GPU_ID"
@@ -43,7 +42,7 @@ TRAIN_WINDOWS=("0-3" "3-6" "6-9" "9-12")
 TRAIN_FS=(0 3 6 9)
 TRAIN_FE=(3 6 9 12)
 
-CACHE_DIR="$OUTBASE/trajectory_cache"
+CACHE_DIR="outputs/trajectory_cache"
 mkdir -p "$CACHE_DIR"
 
 # 評価1パターンを実行する関数
