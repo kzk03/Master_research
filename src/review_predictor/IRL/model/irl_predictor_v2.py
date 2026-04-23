@@ -1268,6 +1268,161 @@ class RetentionIRLSystem:
             self.optimizer, T_0=t0, T_mult=1, eta_min=1e-5
         )
 
+        # ── 特徴量の事前計算（全軌跡・全ステップ、並列化） ──
+        # エポック間で不変なので1回だけ計算してキャッシュ
+        from .network_variants import is_multitask
+        from joblib import Parallel, delayed
+        import multiprocessing
+        n_cpus = multiprocessing.cpu_count()
+        logger.info(f"特徴量を事前計算中... (CPUs={n_cpus})")
+
+        def _precompute_features(trajectories_list, split_name=""):
+            """軌跡リストから事前計算済みテンソルのリストを返す（joblib並列）。"""
+            state_dim = self.state_dim
+            action_dim = self.action_dim
+            device = self.device
+
+            # CPU重い部分: trajectory → numpy配列のリストを返す（self不使用）
+            def _extract_one(trajectory):
+                developer = trajectory.get('developer', trajectory.get('developer_info', {}))
+                activity_history = trajectory.get('activity_history', [])
+                step_labels = trajectory.get('step_labels', [])
+                monthly_histories = trajectory.get('monthly_activity_histories', [])
+
+                if (not activity_history and not monthly_histories) or not step_labels or not monthly_histories:
+                    return None
+
+                email = developer.get('email', developer.get('developer_id', developer.get('reviewer', '')))
+                step_context_dates = trajectory.get('step_context_dates', [])
+                step_total_project_reviews = trajectory.get('step_total_project_reviews', [])
+                path_features_per_step = trajectory.get('path_features_per_step', [])
+
+                min_len = min(len(monthly_histories), len(step_labels))
+                state_vecs = []
+                action_vecs = []
+
+                for i in range(min_len):
+                    month_history = monthly_histories[i]
+                    if not month_history:
+                        state_vecs.append(np.zeros(state_dim, dtype=np.float32))
+                        action_vecs.append(np.zeros(action_dim, dtype=np.float32))
+                        continue
+
+                    if step_context_dates and i < len(step_context_dates):
+                        month_context_date = step_context_dates[i]
+                    else:
+                        month_context_date = month_history[-1]['timestamp']
+
+                    total_proj = step_total_project_reviews[i] if i < len(step_total_project_reviews) else 0
+                    pf = path_features_per_step[i] if i < len(path_features_per_step) else None
+
+                    # _history_to_df のインライン版（self不使用）
+                    rows = []
+                    for act in month_history:
+                        ts = act.get('timestamp')
+                        if ts is None:
+                            continue
+                        if act.get('action_type') == 'authored':
+                            rows.append({
+                                'email': act.get('reviewer_email', ''),
+                                'timestamp': pd.Timestamp(ts) if not isinstance(ts, pd.Timestamp) else ts,
+                                'label': 0,
+                                'owner_email': email,
+                                'change_insertions': act.get('lines_added', act.get('change_insertions', 0)) or 0,
+                                'change_deletions': act.get('lines_deleted', act.get('change_deletions', 0)) or 0,
+                                'change_files_count': act.get('files_changed', act.get('change_files_count', 0)) or 0,
+                                'first_response_time': None,
+                            })
+                        else:
+                            rows.append({
+                                'email': email,
+                                'timestamp': pd.Timestamp(ts) if not isinstance(ts, pd.Timestamp) else ts,
+                                'label': 1 if act.get('accepted', False) else 0,
+                                'owner_email': act.get('owner_email', ''),
+                                'change_insertions': act.get('lines_added', act.get('change_insertions', 0)) or 0,
+                                'change_deletions': act.get('lines_deleted', act.get('change_deletions', 0)) or 0,
+                                'change_files_count': act.get('files_changed', act.get('change_files_count', 0)) or 0,
+                                'first_response_time': act.get('response_time', act.get('first_response_time')),
+                            })
+                    df = pd.DataFrame(rows)
+
+                    if len(df) == 0:
+                        state_vecs.append(np.zeros(state_dim, dtype=np.float32))
+                        action_vecs.append(np.zeros(action_dim, dtype=np.float32))
+                        continue
+
+                    feature_start = df['timestamp'].min()
+                    feature_end = pd.Timestamp(month_context_date)
+                    try:
+                        features = extract_common_features(
+                            df, email, feature_start, feature_end,
+                            normalize=True,
+                            total_project_reviews=total_proj,
+                        )
+                    except Exception:
+                        state_vecs.append(np.zeros(state_dim, dtype=np.float32))
+                        action_vecs.append(np.zeros(action_dim, dtype=np.float32))
+                        continue
+
+                    sv = [float(features.get(f, 0.0)) for f in STATE_FEATURES]
+                    if pf is not None:
+                        sv.extend(float(v) for v in pf)
+                    av = [float(features.get(f, 0.0)) for f in ACTION_FEATURES]
+                    state_vecs.append(np.array(sv, dtype=np.float32))
+                    action_vecs.append(np.array(av, dtype=np.float32))
+
+                if not state_vecs:
+                    return None
+
+                return {
+                    'state_vecs': np.stack(state_vecs),    # [L, state_dim]
+                    'action_vecs': np.stack(action_vecs),  # [L, action_dim]
+                    'min_len': min_len,
+                    'step_labels': step_labels,
+                    'sample_weight': trajectory.get('sample_weight', 1.0),
+                    'step_labels_per_window': trajectory.get('step_labels_per_window'),
+                }
+
+            # joblib で並列実行（CPU重い部分のみ）
+            logger.info(f"  [{split_name}] {len(trajectories_list)} 軌跡を並列処理中...")
+            raw_results = Parallel(n_jobs=-1, backend="loky", verbose=5)(
+                delayed(_extract_one)(t) for t in trajectories_list
+            )
+
+            # numpy → torch テンソルに変換（メインスレッドで高速）
+            precomputed = []
+            for raw in raw_results:
+                if raw is None:
+                    continue
+                min_len = raw['min_len']
+                state_seq = torch.tensor(raw['state_vecs'], dtype=torch.float32, device=device).unsqueeze(0)
+                action_seq = torch.tensor(raw['action_vecs'], dtype=torch.float32, device=device).unsqueeze(0)
+                length = torch.tensor([min_len], dtype=torch.long, device=device)
+                targets = torch.tensor(
+                    [1.0 if l else 0.0 for l in raw['step_labels'][:min_len]],
+                    device=device,
+                )
+                sample_w = torch.full([min_len], raw['sample_weight'], device=device)
+
+                entry = {
+                    'state_seq': state_seq,
+                    'action_seq': action_seq,
+                    'length': length,
+                    'targets': targets,
+                    'sample_weights': sample_w,
+                    'min_len': min_len,
+                    'step_labels': raw['step_labels'],
+                }
+                if raw.get('step_labels_per_window'):
+                    entry['step_labels_per_window'] = raw['step_labels_per_window']
+                precomputed.append(entry)
+
+            return precomputed
+
+        train_data = _precompute_features(train_trajectories, "train")
+        val_data = _precompute_features(val_trajectories, "val")
+        logger.info(f"特徴量事前計算完了: train={len(train_data)}, val={len(val_data)}")
+
         self.network.train()
         training_losses = []
         val_losses = []
@@ -1281,82 +1436,20 @@ class RetentionIRLSystem:
             epoch_loss = 0.0
             batch_count = 0
 
-            for trajectory in train_trajectories:
+            for entry in train_data:
                 try:
-                    # 開発者情報と活動履歴を取得
-                    developer = trajectory.get('developer', trajectory.get('developer_info', {}))
-                    activity_history = trajectory.get('activity_history', [])
-                    context_date = trajectory.get('context_date', datetime.now())
-                    
-                    # 時系列データとして処理
-                    # 各ステップで損失を計算（月次集約ラベル）
-                    step_labels = trajectory.get('step_labels', [])
-                    monthly_histories = trajectory.get('monthly_activity_histories', [])
-
-                    if not activity_history and not monthly_histories:
-                        continue
-
-                    if not step_labels or not monthly_histories:
-                        continue
-
-                    email = developer.get('email', developer.get('developer_id', developer.get('reviewer', '')))
-                    step_context_dates = trajectory.get('step_context_dates', [])
-                    step_total_project_reviews = trajectory.get('step_total_project_reviews', [])
-                    path_features_per_step = trajectory.get('path_features_per_step', [])
-
-                    # 各月の時点での状態を計算（LSTM用）
-                    state_tensors = []
-                    action_tensors = []
-
-                    min_len = min(len(monthly_histories), len(step_labels))
-
-                    for i in range(min_len):
-                        month_history = monthly_histories[i]
-                        if not month_history:
-                            # 活動履歴がない場合はゼロ状態
-                            state_tensors.append(torch.zeros(self.state_dim, device=self.device))
-                            action_tensors.append(torch.zeros(self.action_dim, device=self.device))
-                            continue
-
-                        # 基準日: step_context_dates があれば月末、なければ最後のイベント時刻
-                        if step_context_dates and i < len(step_context_dates):
-                            month_context_date = step_context_dates[i]
-                        else:
-                            month_context_date = month_history[-1]['timestamp']
-
-                        total_proj = step_total_project_reviews[i] if i < len(step_total_project_reviews) else 0
-                        pf = path_features_per_step[i] if i < len(path_features_per_step) else None
-                        s_t, a_t = self.extract_features_tensor(
-                            email, month_history, month_context_date,
-                            total_project_reviews=total_proj,
-                            path_features_vec=pf,
-                        )
-                        state_tensors.append(s_t)
-                        action_tensors.append(a_t)
-
-                    if not state_tensors or not action_tensors:
-                        continue
-
-                    # 3Dテンソルとして構築（LSTM用: [batch=1, sequence_length, features]）
-                    state_sequence = torch.stack(state_tensors).unsqueeze(0)  # [1, seq_len, state_dim]
-                    action_sequence = torch.stack(action_tensors).unsqueeze(0)  # [1, seq_len, action_dim]
-                    lengths = torch.tensor([min_len], dtype=torch.long, device=self.device)
-
-                    # forward_all_stepsで報酬と継続確率を予測
                     predicted_reward, predicted_continuation = self.network.forward_all_steps(
-                        state_sequence, action_sequence, lengths, return_reward=True
+                        entry['state_seq'], entry['action_seq'], entry['length'], return_reward=True
                     )
 
-                    # サンプル重みを取得（依頼なし=0.5、依頼あり=1.0）
-                    sample_weight = trajectory.get('sample_weight', 1.0)
-                    sample_weights = torch.full([min_len], sample_weight, device=self.device)
+                    min_len = entry['min_len']
+                    targets = entry['targets']
+                    sample_weights = entry['sample_weights']
 
-                    from .network_variants import is_multitask
                     if self.model_type != 0 and is_multitask(self.model_type):
-                        # Multi-task: predicted_continuation は {0: [1,L], 1: [1,L], ...}
-                        # predicted_reward は [1, L]
                         predicted_reward_flat = predicted_reward.squeeze(0)
-                        step_labels_per_window = trajectory.get('step_labels_per_window', {})
+                        step_labels_per_window = entry.get('step_labels_per_window', {})
+                        step_labels = entry['step_labels']
                         continuation_loss = torch.tensor(0.0, device=self.device)
                         n_active_heads = 0
                         for head_idx, head_pred in predicted_continuation.items():
@@ -1366,7 +1459,6 @@ class RetentionIRLSystem:
                                 [1.0 if l else 0.0 for l in head_labels[:min_len]],
                                 device=self.device,
                             )
-                            # ラベルが全部同じ（情報なし）ならスキップ
                             if len(head_targets) > 0:
                                 head_pred_flat = head_pred.squeeze(0)
                                 continuation_loss += self.focal_loss(
@@ -1375,23 +1467,12 @@ class RetentionIRLSystem:
                                 n_active_heads += 1
                         if n_active_heads > 0:
                             continuation_loss = continuation_loss / n_active_heads
-                        # reward は primary window のラベルで計算
-                        primary_labels = step_labels[:min_len]
-                        targets = torch.tensor(
-                            [1.0 if l else 0.0 for l in primary_labels],
-                            device=self.device,
-                        )
                         reward_loss = F.mse_loss(
                             predicted_reward_flat, targets * 2.0 - 1.0
                         )
                     else:
-                        # Single-task: predicted_continuation は [1, L]
                         predicted_reward_flat = predicted_reward.squeeze(0)
                         predicted_continuation_flat = predicted_continuation.squeeze(0)
-                        targets = torch.tensor(
-                            [1.0 if label else 0.0 for label in step_labels[:min_len]],
-                            device=self.device,
-                        )
                         continuation_loss = self.focal_loss(
                             predicted_continuation_flat, targets, sample_weights
                         )
@@ -1406,14 +1487,14 @@ class RetentionIRLSystem:
                     loss_per_step.backward()
                     torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                     self.optimizer.step()
-                    
+
                     epoch_loss += loss_per_step.item()
                     batch_count += 1
-                
+
                 except Exception as e:
                     logger.warning(f"軌跡処理エラー: {e}")
                     continue
-            
+
             avg_loss = epoch_loss / max(batch_count, 1)
             training_losses.append(avg_loss)
 
@@ -1425,54 +1506,19 @@ class RetentionIRLSystem:
             val_loss = 0.0
             val_count = 0
             with torch.no_grad():
-                for trajectory in val_trajectories:
+                for entry in val_data:
                     try:
-                        developer = trajectory.get('developer', trajectory.get('developer_info', {}))
-                        activity_history = trajectory.get('activity_history', [])
-                        step_labels = trajectory.get('step_labels', [])
-                        monthly_histories = trajectory.get('monthly_activity_histories', [])
-                        if (not activity_history and not monthly_histories) or not step_labels or not monthly_histories:
-                            continue
-                        email = developer.get('email', developer.get('developer_id', developer.get('reviewer', '')))
-                        step_context_dates = trajectory.get('step_context_dates', [])
-                        step_total_project_reviews = trajectory.get('step_total_project_reviews', [])
-                        path_features_per_step = trajectory.get('path_features_per_step', [])
-                        state_tensors = []
-                        action_tensors = []
-                        min_len = min(len(monthly_histories), len(step_labels))
-                        for i in range(min_len):
-                            month_history = monthly_histories[i]
-                            if not month_history:
-                                state_tensors.append(torch.zeros(self.state_dim, device=self.device))
-                                action_tensors.append(torch.zeros(self.action_dim, device=self.device))
-                                continue
-                            if step_context_dates and i < len(step_context_dates):
-                                month_context_date = step_context_dates[i]
-                            else:
-                                month_context_date = month_history[-1]['timestamp']
-                            total_proj = step_total_project_reviews[i] if i < len(step_total_project_reviews) else 0
-                            pf = path_features_per_step[i] if i < len(path_features_per_step) else None
-                            s_t, a_t = self.extract_features_tensor(
-                                email, month_history, month_context_date,
-                                total_project_reviews=total_proj,
-                                path_features_vec=pf,
-                            )
-                            state_tensors.append(s_t)
-                            action_tensors.append(a_t)
-                        if not state_tensors:
-                            continue
-                        state_sequence = torch.stack(state_tensors).unsqueeze(0)
-                        action_sequence = torch.stack(action_tensors).unsqueeze(0)
-                        lengths = torch.tensor([min_len], dtype=torch.long, device=self.device)
                         predicted_reward, predicted_continuation = self.network.forward_all_steps(
-                            state_sequence, action_sequence, lengths, return_reward=True
+                            entry['state_seq'], entry['action_seq'], entry['length'], return_reward=True
                         )
-                        sample_weight = trajectory.get('sample_weight', 1.0)
-                        sample_weights = torch.full([min_len], sample_weight, device=self.device)
+                        min_len = entry['min_len']
+                        targets = entry['targets']
+                        sample_weights = entry['sample_weights']
 
                         if self.model_type != 0 and is_multitask(self.model_type):
                             predicted_reward_flat = predicted_reward.squeeze(0)
-                            step_labels_per_window = trajectory.get('step_labels_per_window', {})
+                            step_labels_per_window = entry.get('step_labels_per_window', {})
+                            step_labels = entry['step_labels']
                             c_loss = torch.tensor(0.0, device=self.device)
                             n_heads = 0
                             for hi, hp in predicted_continuation.items():
@@ -1484,10 +1530,8 @@ class RetentionIRLSystem:
                                     n_heads += 1
                             if n_heads > 0:
                                 c_loss = c_loss / n_heads
-                            targets = torch.tensor([1.0 if l else 0.0 for l in step_labels[:min_len]], device=self.device)
                             r_loss = F.mse_loss(predicted_reward_flat, targets * 2.0 - 1.0)
                         else:
-                            targets = torch.tensor([1.0 if label else 0.0 for label in step_labels[:min_len]], device=self.device)
                             c_loss = self.focal_loss(predicted_continuation.squeeze(0), targets, sample_weights)
                             r_loss = F.mse_loss(predicted_reward.squeeze(0), targets * 2.0 - 1.0)
                         val_loss += (c_loss + r_loss).item()
@@ -1506,7 +1550,7 @@ class RetentionIRLSystem:
             else:
                 patience_counter += 1
 
-            if epoch % 5 == 0:
+            if True:
                 current_lr = self.optimizer.param_groups[0]['lr']
                 logger.info(f"エポック {epoch}: train_loss={avg_loss:.4f}, val_loss={avg_val_loss:.4f}, LR={current_lr:.6f}, patience={patience_counter}/{patience}")
 
