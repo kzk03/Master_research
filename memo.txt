@@ -66,4 +66,4 @@ tail -f outputs/variant_comparison_server/logs/main.log
 tail -1 outputs/variant_comparison_server/logs/*.log
 
 # 7. 完了後、結果をローカルに同期（ローカルで実行）
-rsync -avz --progress socsel:/mnt/data1/kazuki-h/Master_research_v2/Master_research/outputs/ ./outputs/
+rsync -avz --progress socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/ ./outputs/

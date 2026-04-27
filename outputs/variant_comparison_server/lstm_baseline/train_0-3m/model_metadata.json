@@ -1,0 +1,7 @@
+{
+  "model_type": 0,
+  "state_dim": 23,
+  "action_dim": 5,
+  "hidden_dim": 128,
+  "dropout": 0.2
+}
