@@ -18,7 +18,12 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, average_precision_score
 
-BASE = Path("/Users/kazuki-h/Master_research/outputs/variant_comparison_server/lstm_baseline")
+_SRC = str(Path(__file__).resolve().parents[2] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+from review_predictor.config import ROOT
+
+BASE = ROOT / "outputs" / "variant_comparison_server" / "lstm_baseline"
 
 
 def load_all_predictions():

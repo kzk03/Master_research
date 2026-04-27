@@ -31,10 +31,9 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+_SRC = str(Path(__file__).resolve().parents[2] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 from review_predictor.IRL.features.common_features import (
     FEATURE_NAMES,

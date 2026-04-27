@@ -4,6 +4,7 @@
 """
 
 import json
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -14,8 +15,13 @@ from sklearn.metrics import roc_auc_score
 plt.rcParams["font.size"] = 11
 plt.rcParams["figure.dpi"] = 150
 
-BASE = Path("/Users/kazuki-h/Master_research/outputs/variant_comparison_server")
-OUT = Path("/Users/kazuki-h/Master_research/outputs/variant_comparison_server/figures")
+_SRC = str(Path(__file__).resolve().parents[2] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+from review_predictor.config import ROOT
+
+BASE = ROOT / "outputs" / "variant_comparison_server"
+OUT = BASE / "figures"
 OUT.mkdir(exist_ok=True)
 VARIANTS = ["lstm_baseline", "lstm_attention", "transformer"]
 VARIANT_LABELS = {"lstm_baseline": "LSTM Baseline", "lstm_attention": "LSTM+Attention", "transformer": "Transformer"}
