@@ -37,6 +37,7 @@ TRAIN_END="2022-01-01"
 EVAL_CUTOFF="2023-01-01"
 EPOCHS=50
 PATIENCE=5
+SAVE_IMPORTANCE="${5:-false}"   # 5番目の引数で importance 保存を制御
 
 TRAIN_WINDOWS=("0-3" "3-6" "6-9" "9-12")
 TRAIN_FS=(0 3 6 9)
@@ -61,6 +62,10 @@ run_eval() {
     fi
 
     echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価開始..."
+    local importance_flag=""
+    if [ "$SAVE_IMPORTANCE" = "true" ]; then
+        importance_flag="--save-importance"
+    fi
     uv run python scripts/analyze/eval_path_prediction.py \
         --data "$REVIEWS" \
         --raw-json "${RAW_JSON[@]}" \
@@ -72,7 +77,8 @@ run_eval() {
         --rf-train-end "$TRAIN_END" \
         --device cuda \
         --n-jobs 4 \
-        --output-dir "$eval_dir"
+        --output-dir "$eval_dir" \
+        $importance_flag
     echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
 }
 

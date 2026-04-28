@@ -526,6 +526,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="複数時点で評価（3ヶ月刻み）",
     )
+    p.add_argument(
+        "--save-importance",
+        action="store_true",
+        help="IRL gradient importance と RF_Dir Gini importance を保存する",
+    )
     return p.parse_args()
 
 
@@ -543,6 +548,8 @@ def evaluate_single_timepoint(
     rf_train_end: Optional[datetime] = None,
     rf_future_start_months: Optional[int] = None,
     n_jobs: int = -1,
+    save_importance: bool = False,
+    output_dir: Optional[Path] = None,
 ) -> Dict[str, Dict[str, float]]:
     """単一時点の評価を実行し、全手法の結果を返す。"""
     # RF訓練ラベル窓（未指定なら評価窓と同じ = 従来動作）
@@ -738,6 +745,82 @@ def evaluate_single_timepoint(
                     + " ".join(f"{k}={v:.3f}" for k, v in clf_m.items())
                 )
 
+        # IRL gradient importance を保存
+        if save_importance and output_dir is not None:
+            try:
+                import torch as _torch
+                from review_predictor.IRL.features.common_features import (
+                    STATE_FEATURES as _SF, ACTION_FEATURES as _AF,
+                )
+                from review_predictor.IRL.features.path_features import PATH_FEATURE_NAMES as _PFN
+                _irl = dir_predictor._irl_system
+                _is_dir = _irl.state_dim > len(_SF)
+                _all_grads_abs = []
+                _all_grads_signed = []
+                _sample_devs = list(all_devs)[:300]
+                for _dev in _sample_devs:
+                    _md = dir_predictor._build_monthly_data(_dev, prediction_time)
+                    _mh, _sd, _sr, _di = _md
+                    if not _mh or _di is None:
+                        continue
+                    # 代表ディレクトリ1つを選択
+                    _dev_dirs = [d for d, devs in dir_developers.items() if _dev in devs]
+                    _d = _dev_dirs[0] if _dev_dirs else None
+                    _spf = None
+                    if _is_dir and _d:
+                        _task = frozenset({_d})
+                        _spf = [path_extractor.compute(_dev, _task, cd) for cd in _sd]
+                    _email = _di.get("email", _di.get("developer_id", _dev))
+                    _st, _at = [], []
+                    for _i, (_mhi, _mctx) in enumerate(zip(_mh, _sd)):
+                        if not _mhi:
+                            _st.append(_torch.zeros(_irl.state_dim))
+                            _at.append(_torch.zeros(_irl.action_dim))
+                            continue
+                        _tp = _sr[_i] if _sr and _i < len(_sr) else 0
+                        _pf = _spf[_i] if _spf and _i < len(_spf) else None
+                        _s, _a = _irl.extract_features_tensor(
+                            _email, _mhi, _mctx, total_project_reviews=_tp,
+                            path_features_vec=_pf,
+                        )
+                        _st.append(_s); _at.append(_a)
+                    if not _st:
+                        continue
+                    _ss = _torch.stack(_st).unsqueeze(0).requires_grad_(True)
+                    _as = _torch.stack(_at).unsqueeze(0).requires_grad_(True)
+                    _ln = _torch.tensor([len(_st)], dtype=_torch.long)
+                    _, _cont = _irl.network(_ss, _as, _ln)
+                    _cont.backward()
+                    _sg_signed = _ss.grad.mean(dim=(0, 1)).detach().cpu().numpy()
+                    _ag_signed = _as.grad.mean(dim=(0, 1)).detach().cpu().numpy()
+                    _all_grads_signed.append(np.concatenate([_sg_signed, _ag_signed]))
+                    _sg_abs = _ss.grad.abs().mean(dim=(0, 1)).detach().cpu().numpy()
+                    _ag_abs = _as.grad.abs().mean(dim=(0, 1)).detach().cpu().numpy()
+                    _all_grads_abs.append(np.concatenate([_sg_abs, _ag_abs]))
+                if _all_grads_abs:
+                    _sn = list(_SF) + (list(_PFN) if _is_dir else [])
+                    _names = _sn + list(_AF)
+                    import json as _json
+                    # 絶対値版
+                    _mg = np.mean(_all_grads_abs, axis=0)
+                    _tot = _mg.sum()
+                    if _tot > 0:
+                        _mg = _mg / _tot
+                    _imp = {n: float(v) for n, v in zip(_names, _mg)}
+                    _imp_path = Path(output_dir) / "irl_feature_importance.json"
+                    with open(_imp_path, "w") as f:
+                        _json.dump(_imp, f, indent=2, ensure_ascii=False)
+                    logger.info(f"IRL importance (abs) を保存: {_imp_path} ({len(_all_grads_abs)} samples)")
+                    # 符号付き版
+                    _mg_s = np.mean(_all_grads_signed, axis=0)
+                    _imp_s = {n: float(v) for n, v in zip(_names, _mg_s)}
+                    _imp_s_path = Path(output_dir) / "irl_feature_importance_signed.json"
+                    with open(_imp_s_path, "w") as f:
+                        _json.dump(_imp_s, f, indent=2, ensure_ascii=False)
+                    logger.info(f"IRL importance (signed) を保存: {_imp_s_path}")
+            except Exception as e:
+                logger.warning(f"IRL importance 計算で例外: {e}")
+
     # ── RF_Dir: ディレクトリ単位 RF ──
     logger.info("RF_Dir: ディレクトリ単位 RF で推論...")
     if rf_train_end is not None:
@@ -764,6 +847,19 @@ def evaluate_single_timepoint(
         X_train_dir, y_train_dir = prepare_rf_features_directory(rf_dir_train_df)
         clf_dir = RFC(n_estimators=100, class_weight="balanced", random_state=42, n_jobs=-1)
         clf_dir.fit(X_train_dir, y_train_dir)
+
+        # RF_Dir Gini importance を保存
+        if save_importance and output_dir is not None:
+            from review_predictor.IRL.features.common_features import FEATURE_NAMES_WITH_PATH as _FN_PATH
+            rf_importance = {
+                name: float(val)
+                for name, val in zip(_FN_PATH, clf_dir.feature_importances_)
+            }
+            import json as _json
+            rf_imp_path = Path(output_dir) / "rf_dir_feature_importance.json"
+            with open(rf_imp_path, "w") as f:
+                _json.dump({"feature_importance": rf_importance}, f, indent=2, ensure_ascii=False)
+            logger.info(f"RF_Dir importance を保存: {rf_imp_path}")
 
         # 推論: 各 (dev, dir) ペアの continuation_prob（並列）
         from review_predictor.IRL.features.common_features import FEATURE_NAMES_WITH_PATH
@@ -1016,6 +1112,8 @@ def main() -> None:
             rf_train_end=rf_train_end_dt,
             rf_future_start_months=rf_fsm,
             n_jobs=args.n_jobs,
+            save_importance=args.save_importance,
+            output_dir=args.output_dir,
         )
 
         # CSV 保存
