@@ -39,3 +39,6 @@ study_materials_post_thesis/
 
 archive/
 *.pkl
+
+spec/
+CLAUDE.md
