@@ -1,0 +1,362 @@
+[
+  {
+    "project": "cinder",
+    "n_py_files": 1311,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "c6b4fc17aec3b65364f7c60e55b5285e80cad871"
+  },
+  {
+    "project": "glance",
+    "n_py_files": 367,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "3ed84f79ef00b30ec5874625034bfabc304e4f3e"
+  },
+  {
+    "project": "heat",
+    "n_py_files": 824,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "28c4c76d8092f7a36e1042f23c0e067590b1aa06"
+  },
+  {
+    "project": "horizon",
+    "n_py_files": 1072,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "2e947367bc210bf7cf4bd58f2ca6d975aee03381"
+  },
+  {
+    "project": "ironic",
+    "n_py_files": 697,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "34bc26b55dcdd1089b69a52dd46b02991c3c14c7"
+  },
+  {
+    "project": "keystone",
+    "n_py_files": 561,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "db9a437261f7b12ddc7f51547478473479847a2a"
+  },
+  {
+    "project": "neutron",
+    "n_py_files": 1969,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "2fd51371ec95a712300707623f77ced6969d54fc"
+  },
+  {
+    "project": "nova",
+    "n_py_files": 1488,
+    "cross_project_deps": {
+      "cinder": 1,
+      "glance": 1,
+      "neutron": 1
+    },
+    "internal_deps": {
+      "nova": {
+        "cinder": 1,
+        "glance": 1,
+        "neutron": 1
+      }
+    },
+    "snapshot_date": "2025-03-31",
+    "commit": "ba00d60b95c44a57505926aa4b7698922a847736"
+  },
+  {
+    "project": "octavia",
+    "n_py_files": 608,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "4db66dd06d0f0cb9fae427b6b53d92ae2851c118"
+  },
+  {
+    "project": "swift",
+    "n_py_files": 409,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-03-31",
+    "commit": "05143a99f8f3c860a887e4eb49688aef1e7a4a78"
+  },
+  {
+    "project": "cinder",
+    "n_py_files": 1311,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "27373d61fe54e55afa91f1e93cc65d3dd0582f9f"
+  },
+  {
+    "project": "glance",
+    "n_py_files": 371,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "894927c1233668885129b65fa8d0a266d865e7be"
+  },
+  {
+    "project": "heat",
+    "n_py_files": 824,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "a79fe0c0ee57bda8d826fd7382fbadd343126c28"
+  },
+  {
+    "project": "horizon",
+    "n_py_files": 1073,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "5e45d49510970bb8505cf078cbdd8ecd66afa424"
+  },
+  {
+    "project": "ironic",
+    "n_py_files": 705,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "21de7574ca34008ee05257f42d4aab9dacde815c"
+  },
+  {
+    "project": "keystone",
+    "n_py_files": 562,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "48407c6d7b83630a12867fbd989d2f57cb75346d"
+  },
+  {
+    "project": "neutron",
+    "n_py_files": 1971,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "6bbe632c72bac489145f9cdcdeeaaff1d5979319"
+  },
+  {
+    "project": "nova",
+    "n_py_files": 1483,
+    "cross_project_deps": {
+      "cinder": 1,
+      "glance": 1,
+      "neutron": 1
+    },
+    "internal_deps": {
+      "nova": {
+        "cinder": 1,
+        "glance": 1,
+        "neutron": 1
+      }
+    },
+    "snapshot_date": "2025-06-30",
+    "commit": "43d57ae63d1ecda24d8707b4750d404daadc980f"
+  },
+  {
+    "project": "octavia",
+    "n_py_files": 610,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "b246c8ff0bd602fb763324178026c70656b14886"
+  },
+  {
+    "project": "swift",
+    "n_py_files": 412,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-06-30",
+    "commit": "a555a8593e192361f43f8e32172ee4887b9339bc"
+  },
+  {
+    "project": "cinder",
+    "n_py_files": 1317,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "8064195521f9f511f630ff63b5dde1e88ff53e18"
+  },
+  {
+    "project": "glance",
+    "n_py_files": 371,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "d928d8e522127410a83dfa323812b05859f53547"
+  },
+  {
+    "project": "heat",
+    "n_py_files": 816,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "4a1e40f89202be7614a0366155ca7227e30dc95a"
+  },
+  {
+    "project": "horizon",
+    "n_py_files": 1072,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "685b74275ab764feded5514e9755b5216ded1914"
+  },
+  {
+    "project": "ironic",
+    "n_py_files": 715,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "c2ec64be2d649655cf39e6f8aab027d5636231a1"
+  },
+  {
+    "project": "keystone",
+    "n_py_files": 562,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "41b31668b9c92bede2998ff12003083bb33f330e"
+  },
+  {
+    "project": "neutron",
+    "n_py_files": 1975,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "1d921fdf7bf0431bb082204d23b90dbf9b2fe094"
+  },
+  {
+    "project": "nova",
+    "n_py_files": 1489,
+    "cross_project_deps": {
+      "cinder": 1,
+      "glance": 1,
+      "neutron": 1
+    },
+    "internal_deps": {
+      "nova": {
+        "cinder": 1,
+        "glance": 1,
+        "neutron": 1
+      }
+    },
+    "snapshot_date": "2025-09-30",
+    "commit": "d265faed2c9e16e8553b76959791558ebe6c8080"
+  },
+  {
+    "project": "octavia",
+    "n_py_files": 610,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "58ee93d024565f3ba31a607c70cf66f0672ad4e7"
+  },
+  {
+    "project": "swift",
+    "n_py_files": 415,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-09-30",
+    "commit": "dd23020c309787ed94f59efe941213f83db51a6e"
+  },
+  {
+    "project": "cinder",
+    "n_py_files": 1317,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "2bdc892a023d2bbdf8e66e0e9645a86b776fcf61"
+  },
+  {
+    "project": "glance",
+    "n_py_files": 372,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "d55c065a38d4be8616b49692e7222543c48cf8a7"
+  },
+  {
+    "project": "heat",
+    "n_py_files": 816,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "bb2c25f8ec0f42f2174f8c558d15dca66cb5a6f0"
+  },
+  {
+    "project": "horizon",
+    "n_py_files": 1074,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "7ff84aac8f2632e7c4691ef5d3b4040e6b0046cc"
+  },
+  {
+    "project": "ironic",
+    "n_py_files": 761,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "5f59aa0b2859afce059500a629eb3ef3ecc03dbf"
+  },
+  {
+    "project": "keystone",
+    "n_py_files": 568,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "d9d20173bb1a10700ab457c5a7c61e634dd5dffb"
+  },
+  {
+    "project": "neutron",
+    "n_py_files": 1992,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "185b5ffe2b8f91dbbac38667e03c07969dc99e7a"
+  },
+  {
+    "project": "nova",
+    "n_py_files": 1491,
+    "cross_project_deps": {
+      "cinder": 1,
+      "glance": 1,
+      "neutron": 1
+    },
+    "internal_deps": {
+      "nova": {
+        "cinder": 1,
+        "glance": 1,
+        "neutron": 1
+      }
+    },
+    "snapshot_date": "2025-12-31",
+    "commit": "21b365b140dd87e9986f310802dbb26f8695740e"
+  },
+  {
+    "project": "octavia",
+    "n_py_files": 611,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "aa3588c1f637f9d1c5276731e3e91e66d5313bd3"
+  },
+  {
+    "project": "swift",
+    "n_py_files": 415,
+    "cross_project_deps": {},
+    "internal_deps": {},
+    "snapshot_date": "2025-12-31",
+    "commit": "9366678a9e5c5725b67927175d9f56ffbe6a2060"
+  }
+]

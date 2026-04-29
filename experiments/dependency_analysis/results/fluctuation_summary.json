@@ -1,0 +1,19 @@
+{
+  "base_date": "2025-01-01 00:00:00",
+  "label_definition": "accept/reject/weak_neg/exclude (same as train_model.py)",
+  "total_reviewers": 1942,
+  "multi_period_reviewers": 301,
+  "fluctuating_reviewers": 169,
+  "fluctuation_rate": 56.1,
+  "transitions": {
+    "accept->weak_neg": 92,
+    "weak_neg->weak_neg": 222,
+    "weak_neg->accept": 102,
+    "weak_neg->reject": 56,
+    "reject->weak_neg": 80,
+    "accept->accept": 272,
+    "reject->reject": 16,
+    "accept->reject": 33,
+    "reject->accept": 30
+  }
+}
