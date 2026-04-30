@@ -193,25 +193,12 @@ def plot_comparison(df: pd.DataFrame):
 
 
 def plot_heatmaps(df: pd.DataFrame):
-    """10パターン × 手法 のヒートマップを指標ごとに描画."""
+    """手法別 Train Window × Eval Window 三角行列ヒートマップ（指標ごと）."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 10パターンのラベルを作成
-    df = df.copy()
-    df["pair"] = df["train"] + "→" + df["eval"]
-    # 同期間に★をつける
-    df["pair_label"] = df.apply(
-        lambda r: f"{r['train']}→{r['eval']}*" if r["same_period"] else f"{r['train']}→{r['eval']}",
-        axis=1,
-    )
-
-    # pair順序を固定（train昇順→eval昇順）
-    pair_order = []
-    for tp in PERIODS:
-        sub = df[df["train"] == tp].sort_values("eval")
-        for lbl in sub["pair_label"].unique():
-            if lbl not in pair_order:
-                pair_order.append(lbl)
+    methods = METHODS_CLF  # RF, IRL_Dir, RF_Dir
+    method_labels = {"RF": "RF (global)", "IRL_Dir": "IRL_Dir (LSTM)", "RF_Dir": "RF_Dir"}
+    period_labels = [f"{p}m" for p in PERIODS]
 
     metrics_to_plot = [
         ("clf_auc_roc", "AUC-ROC"),
@@ -222,50 +209,71 @@ def plot_heatmaps(df: pd.DataFrame):
         ("spearman_r", "Spearman ρ"),
     ]
 
-    fig, axes = plt.subplots(2, 3, figsize=(20, 11))
-    axes = axes.flatten()
+    for metric, metric_label in metrics_to_plot:
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    for ax, (metric, label) in zip(axes, metrics_to_plot):
-        if metric.startswith("clf_"):
-            methods = METHODS_CLF
-        else:
-            methods = METHODS_ALL
+        # 全手法の値を集めてカラー範囲を統一
+        all_vals = []
+        for method in methods:
+            sub = df[df["method"] == method]
+            for _, row in sub.iterrows():
+                v = row[metric]
+                if not np.isnan(v):
+                    all_vals.append(v)
+        vmin = max(0, min(all_vals) - 0.03)
+        vmax = min(1, max(all_vals) + 0.02)
 
-        # pivot: rows=pair_label, cols=method
-        sub = df[df["method"].isin(methods)]
-        pivot = sub.pivot_table(index="pair_label", columns="method", values=metric)
-        pivot = pivot.reindex(index=[p for p in pair_order if p in pivot.index],
-                              columns=methods)
+        for ax, method in zip(axes, methods):
+            # 4x4 行列を作る (train x eval), NaN で上三角をマスク
+            matrix = np.full((4, 4), np.nan)
+            sub = df[df["method"] == method]
+            for _, row in sub.iterrows():
+                ti = PERIODS.index(row["train"])
+                ei = PERIODS.index(row["eval"])
+                matrix[ti, ei] = row[metric]
 
-        # カラーマップの範囲
-        vmin = max(0, pivot.min().min() - 0.05)
-        vmax = min(1, pivot.max().max() + 0.02)
+            # マスク: train > eval の部分（下三角）は存在しないのでそのまま NaN
+            # imshow 用にマスク
+            masked = np.ma.masked_invalid(matrix)
 
-        im = ax.imshow(pivot.values, cmap="YlOrRd", aspect="auto", vmin=vmin, vmax=vmax)
+            cmap = plt.cm.Blues.copy()
+            cmap.set_bad(color="white")
 
-        # セル内にテキスト
-        for i in range(pivot.shape[0]):
-            for j in range(pivot.shape[1]):
-                val = pivot.values[i, j]
-                if np.isnan(val):
-                    continue
-                color = "white" if val > (vmin + vmax) / 2 else "black"
-                ax.text(j, i, f"{val:.3f}", ha="center", va="center",
-                        fontsize=8, color=color, fontweight="bold")
+            im = ax.imshow(masked, cmap=cmap, aspect="equal", vmin=vmin, vmax=vmax)
 
-        ax.set_xticks(range(len(methods)))
-        ax.set_xticklabels(methods, rotation=30, ha="right", fontsize=9)
-        ax.set_yticks(range(len(pivot.index)))
-        ax.set_yticklabels(pivot.index, fontsize=9)
-        ax.set_title(label, fontsize=13, fontweight="bold")
-        fig.colorbar(im, ax=ax, shrink=0.8)
+            # セル内にテキスト
+            for i in range(4):
+                for j in range(4):
+                    val = matrix[i, j]
+                    if np.isnan(val):
+                        continue
+                    # 値が高い（色が濃い）ときは白文字
+                    threshold = vmin + (vmax - vmin) * 0.6
+                    color = "white" if val > threshold else "black"
+                    ax.text(j, i, f"{val:.3f}", ha="center", va="center",
+                            fontsize=12, color=color, fontweight="bold")
 
-    fig.suptitle("10-Pattern Heatmap: IRL_Dir (LSTM) vs Baselines\n(* = same-period evaluation)",
-                 fontsize=14, fontweight="bold")
-    fig.tight_layout(rect=[0, 0, 1, 0.94])
-    fig.savefig(OUT_DIR / "heatmap_10patterns.pdf", format="pdf")
-    print(f"Saved: {OUT_DIR / 'heatmap_10patterns.pdf'}")
-    plt.close(fig)
+            ax.set_xticks(range(4))
+            ax.set_xticklabels(period_labels, fontsize=11)
+            ax.set_yticks(range(4))
+            ax.set_yticklabels(period_labels, fontsize=11)
+            ax.set_xlabel("Eval Window", fontsize=12)
+            ax.set_ylabel("Train Window", fontsize=12)
+            ax.set_title(method_labels[method], fontsize=14, fontweight="bold")
+
+        # 共通カラーバー
+        fig.subplots_adjust(right=0.92)
+        cbar_ax = fig.add_axes([0.94, 0.15, 0.015, 0.7])
+        cbar = fig.colorbar(im, cax=cbar_ax)
+        cbar.set_label(metric_label, fontsize=12)
+
+        fig.suptitle(f"Cross-Temporal Evaluation: {metric_label}",
+                     fontsize=15, fontweight="bold")
+        fig.tight_layout(rect=[0, 0, 0.93, 0.93])
+        fname = f"heatmap_{metric.replace('clf_', '')}.pdf"
+        fig.savefig(OUT_DIR / fname, format="pdf")
+        print(f"Saved: {OUT_DIR / fname}")
+        plt.close(fig)
 
 
 def main():
