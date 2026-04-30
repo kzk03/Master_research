@@ -476,6 +476,90 @@ def compute_per_developer_classification(
     return metrics
 
 
+# ── 校正 ──────────────────────────────────────────────────────
+
+
+def calibrate_predictions(
+    pair_results: List[Tuple[str, str, float]],
+    actual_dir_devs: Dict[str, Set[str]],
+    calibration_fraction: float = 0.3,
+    random_seed: int = 777,
+) -> Tuple[List[Tuple[str, str, float]], pd.DataFrame]:
+    """
+    IsotonicRegression で IRL_Dir の (dev, dir) 確率を事後校正する。
+
+    Args:
+        pair_results: [(directory, developer, raw_prob), ...]
+        actual_dir_devs: {directory: {dev_who_actually_contributed, ...}}
+        calibration_fraction: フィット用に使うペアの割合
+        random_seed: 再現性用シード
+
+    Returns:
+        calibrated_pair_results: 校正済み確率に置き換えた pair_results
+        calibration_curve: 校正曲線データ (DataFrame)
+    """
+    from sklearn.isotonic import IsotonicRegression
+    from sklearn.model_selection import StratifiedShuffleSplit
+
+    # y_true / y_score を構築
+    y_true = np.array([
+        1 if dev in actual_dir_devs.get(d, set()) else 0
+        for d, dev, _ in pair_results
+    ])
+    y_score = np.array([prob for _, _, prob in pair_results])
+
+    n_pos = int(y_true.sum())
+    n_neg = len(y_true) - n_pos
+    if n_pos < 10 or n_neg < 10:
+        logger.warning(f"校正スキップ: 正例={n_pos}, 負例={n_neg} が少なすぎる")
+        return pair_results, pd.DataFrame()
+
+    # Stratified split: calibration_fraction をフィット用に使う
+    sss = StratifiedShuffleSplit(
+        n_splits=1,
+        train_size=calibration_fraction,
+        random_state=random_seed,
+    )
+    cal_idx, _ = next(sss.split(y_score, y_true))
+
+    # Isotonic regression をフィット
+    iso = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
+    iso.fit(y_score[cal_idx], y_true[cal_idx])
+
+    # 全ペアを変換
+    calibrated_scores = iso.transform(y_score)
+
+    calibrated_pair_results = [
+        (d, dev, float(calibrated_scores[i]))
+        for i, (d, dev, _) in enumerate(pair_results)
+    ]
+
+    # 校正曲線データ（reliability diagram 用）
+    n_bins = 10
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    curve_rows = []
+    for b in range(n_bins):
+        lo, hi = bin_edges[b], bin_edges[b + 1]
+        mask_raw = (y_score >= lo) & (y_score < hi)
+        mask_cal = (calibrated_scores >= lo) & (calibrated_scores < hi)
+        curve_rows.append({
+            "bin_center": (lo + hi) / 2,
+            "fraction_positive_raw": float(y_true[mask_raw].mean()) if mask_raw.sum() > 0 else np.nan,
+            "mean_predicted_raw": float(y_score[mask_raw].mean()) if mask_raw.sum() > 0 else np.nan,
+            "count_raw": int(mask_raw.sum()),
+            "fraction_positive_cal": float(y_true[mask_cal].mean()) if mask_cal.sum() > 0 else np.nan,
+            "mean_predicted_cal": float(calibrated_scores[mask_cal].mean()) if mask_cal.sum() > 0 else np.nan,
+            "count_cal": int(mask_cal.sum()),
+        })
+    cal_curve = pd.DataFrame(curve_rows)
+
+    logger.info(
+        f"校正完了: フィット={len(cal_idx)}ペア, "
+        f"raw_mean={y_score.mean():.3f} → cal_mean={calibrated_scores.mean():.3f}"
+    )
+    return calibrated_pair_results, cal_curve
+
+
 # ── メイン ────────────────────────────────────────────────────
 
 
@@ -531,6 +615,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="IRL gradient importance と RF_Dir Gini importance を保存する",
     )
+    p.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="IsotonicRegression で IRL_Dir 出力を事後校正する",
+    )
+    p.add_argument(
+        "--calibration-fraction",
+        type=float,
+        default=0.3,
+        help="校正フィットに使う (dev, dir) ペアの割合（残りで評価）",
+    )
     return p.parse_args()
 
 
@@ -550,6 +645,8 @@ def evaluate_single_timepoint(
     n_jobs: int = -1,
     save_importance: bool = False,
     output_dir: Optional[Path] = None,
+    calibrate: bool = False,
+    calibration_fraction: float = 0.3,
 ) -> Dict[str, Dict[str, float]]:
     """単一時点の評価を実行し、全手法の結果を返す。"""
     # RF訓練ラベル窓（未指定なら評価窓と同じ = 従来動作）
@@ -744,6 +841,78 @@ def evaluate_single_timepoint(
                     f"[IRL_Dir classification] "
                     + " ".join(f"{k}={v:.3f}" for k, v in clf_m.items())
                 )
+
+        # ── IRL_Dir 校正版 ──
+        if calibrate and pair_results:
+            calibrated_pair_results, cal_curve = calibrate_predictions(
+                pair_results, actual_dir_devs, calibration_fraction,
+            )
+            # 校正済みで集計
+            irl_dir_probs_cal: Dict[str, Dict[str, float]] = {}
+            irl_dir_agg_cal: Dict[str, float] = {}
+            for d, dev, prob in calibrated_pair_results:
+                irl_dir_probs_cal.setdefault(d, {})[dev] = prob
+                irl_dir_agg_cal[d] = irl_dir_agg_cal.get(d, 0.0) + prob
+
+            methods["IRL_Dir_calibrated"] = irl_dir_agg_cal
+            metrics_cal = compute_metrics(irl_dir_agg_cal, actual, "IRL_Dir_calibrated")
+            danger_cal = compute_danger_detection(
+                irl_dir_agg_cal, actual,
+                threshold=danger_threshold,
+                danger_actual_threshold=danger_actual_threshold,
+                method_name="IRL_Dir_calibrated",
+            )
+            all_results["IRL_Dir_calibrated"] = {
+                **metrics_cal,
+                **{f"danger_{k}": v for k, v in danger_cal.items()},
+            }
+            # 校正版の分類評価
+            y_true_cal: List[int] = []
+            y_prob_cal: List[float] = []
+            for d, devs in dir_developers.items():
+                actual_devs_d = actual_dir_devs.get(d, set())
+                for dev in devs:
+                    y_true_cal.append(1 if dev in actual_devs_d else 0)
+                    y_prob_cal.append(irl_dir_probs_cal.get(d, {}).get(dev, 0.5))
+            if y_true_cal:
+                from sklearn.metrics import roc_auc_score as _roc, f1_score as _f1
+                from sklearn.metrics import precision_score as _ps, recall_score as _rs
+                from sklearn.metrics import precision_recall_curve as _prc
+                from sklearn.metrics import auc as _auc
+                _yt = np.array(y_true_cal)
+                _yp = np.array(y_prob_cal)
+                _np = int(_yt.sum()); _nn = len(_yt) - _np
+                if _np > 0 and _nn > 0:
+                    _ar = float(_roc(_yt, _yp))
+                    _pc, _rc, _th = _prc(_yt, _yp)
+                    _ap = float(_auc(_rc, _pc))
+                    _f1s = 2 * (_pc * _rc) / (_pc + _rc + 1e-10)
+                    _bi = np.argmax(_f1s)
+                    _bt = _th[_bi] if _bi < len(_th) else 0.5
+                    _pred = (_yp >= _bt).astype(int)
+                    _cm = {
+                        "auc_roc": _ar, "auc_pr": _ap,
+                        "f1": float(_f1(_yt, _pred, zero_division=0)),
+                        "precision": float(_ps(_yt, _pred, zero_division=0)),
+                        "recall": float(_rs(_yt, _pred, zero_division=0)),
+                        "threshold": float(_bt),
+                        "n_pairs": float(len(_yt)),
+                        "n_pos": float(_np), "n_neg": float(_nn),
+                    }
+                    all_results["IRL_Dir_calibrated"] = {
+                        **all_results.get("IRL_Dir_calibrated", {}),
+                        **{f"clf_{k}": v for k, v in _cm.items()},
+                    }
+                    logger.info(
+                        f"[IRL_Dir_calibrated classification] "
+                        + " ".join(f"{k}={v:.3f}" for k, v in _cm.items())
+                    )
+            # 校正曲線の保存
+            if output_dir is not None and len(cal_curve) > 0:
+                Path(output_dir).mkdir(parents=True, exist_ok=True)
+                cal_path = Path(output_dir) / "calibration_curve.csv"
+                cal_curve.to_csv(cal_path, index=False)
+                logger.info(f"校正曲線を保存: {cal_path}")
 
         # IRL gradient importance を保存
         if save_importance and output_dir is not None:
@@ -994,6 +1163,7 @@ def evaluate_single_timepoint(
     # 8. (developer, directory) ペアごとの予測結果を CSV 保存
     # rf_dir_dev_probs がスコープ内に存在しない場合は空辞書
     _rf_dir_dev_probs = rf_dir_dev_probs if 'rf_dir_dev_probs' in dir() else {}
+    _irl_dir_probs_cal = irl_dir_probs_cal if 'irl_dir_probs_cal' in dir() else {}
     pair_rows: List[Dict] = []
     for d, devs in dir_developers.items():
         actual_devs = actual_dir_devs.get(d, set())
@@ -1003,6 +1173,7 @@ def evaluate_single_timepoint(
                 "directory": d,
                 "label": 1 if dev in actual_devs else 0,
                 "irl_dir_prob": irl_dir_probs.get(d, {}).get(dev, None),
+                "irl_dir_prob_calibrated": _irl_dir_probs_cal.get(d, {}).get(dev, None),
                 "rf_dir_prob": _rf_dir_dev_probs.get(d, {}).get(dev, None),
                 "irl_global_prob": continuation_probs.get(dev, None),
                 "rf_global_prob": rf_probs.get(dev, None),
@@ -1114,6 +1285,8 @@ def main() -> None:
             n_jobs=args.n_jobs,
             save_importance=args.save_importance,
             output_dir=args.output_dir,
+            calibrate=args.calibrate,
+            calibration_fraction=args.calibration_fraction,
         )
 
         # CSV 保存
