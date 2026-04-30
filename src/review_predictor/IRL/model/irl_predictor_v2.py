@@ -480,6 +480,7 @@ class RetentionIRLSystem:
         context_date: datetime,
         total_project_reviews: int = 0,
         path_features_vec: Optional[np.ndarray] = None,
+        event_features_vec: Optional[Dict[str, float]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         activity_history から common_features.py で STATE / ACTION テンソルを生成。
@@ -519,6 +520,11 @@ class RetentionIRLSystem:
         state_vec = [float(features.get(f, 0.0)) for f in STATE_FEATURES]
         if path_features_vec is not None:
             state_vec.extend(float(v) for v in path_features_vec)
+        if event_features_vec is not None:
+            state_vec.extend(float(event_features_vec.get(k, 0.0)) for k in [
+                'event_lines_changed', 'event_response_time',
+                'event_accepted', 'time_since_prev_event',
+            ])
         action_vec = [float(features.get(f, 0.0)) for f in ACTION_FEATURES]
 
         return (
@@ -1296,6 +1302,7 @@ class RetentionIRLSystem:
                 step_context_dates = trajectory.get('step_context_dates', [])
                 step_total_project_reviews = trajectory.get('step_total_project_reviews', [])
                 path_features_per_step = trajectory.get('path_features_per_step', [])
+                event_features_per_step = trajectory.get('event_features', [])
 
                 min_len = min(len(monthly_histories), len(step_labels))
                 state_vecs = []
@@ -1315,6 +1322,7 @@ class RetentionIRLSystem:
 
                     total_proj = step_total_project_reviews[i] if i < len(step_total_project_reviews) else 0
                     pf = path_features_per_step[i] if i < len(path_features_per_step) else None
+                    ef = event_features_per_step[i] if i < len(event_features_per_step) else None
 
                     # _history_to_df のインライン版（self不使用）
                     rows = []
@@ -1367,6 +1375,11 @@ class RetentionIRLSystem:
                     sv = [float(features.get(f, 0.0)) for f in STATE_FEATURES]
                     if pf is not None:
                         sv.extend(float(v) for v in pf)
+                    if ef is not None:
+                        sv.extend(float(ef.get(k, 0.0)) for k in [
+                            'event_lines_changed', 'event_response_time',
+                            'event_accepted', 'time_since_prev_event',
+                        ])
                     av = [float(features.get(f, 0.0)) for f in ACTION_FEATURES]
                     state_vecs.append(np.array(sv, dtype=np.float32))
                     action_vecs.append(np.array(av, dtype=np.float32))
@@ -1675,14 +1688,13 @@ class RetentionIRLSystem:
         context_date: Optional[datetime] = None,
         step_total_project_reviews: Optional[List[int]] = None,
         step_path_features: Optional[List[np.ndarray]] = None,
+        step_event_features: Optional[List[Dict[str, float]]] = None,
         head_index: int = 0,
     ) -> Dict[str, Any]:
         """
-        月次シーケンスを使った時系列予測（卒論設計準拠）。
+        月次/イベント シーケンスを使った時系列予測（卒論設計準拠）。
 
-        訓練と同じ月次ステップをLSTMに入力し、最終ステップの出力で予測する。
-        スナップショット（seq_len=1）ではなく、全月次シーケンスを使うため
-        train/evalの入力形式が一致する。
+        訓練と同じステップをLSTMに入力し、最終ステップの出力で予測する。
 
         Args:
             developer: 開発者情報
@@ -1729,10 +1741,14 @@ class RetentionIRLSystem:
                 pf = (step_path_features[i]
                       if step_path_features and i < len(step_path_features)
                       else None)
+                ef = (step_event_features[i]
+                      if step_event_features and i < len(step_event_features)
+                      else None)
                 s_t, a_t = self.extract_features_tensor(
                     email, month_history, month_ctx,
                     total_project_reviews=total_proj,
                     path_features_vec=pf,
+                    event_features_vec=ef,
                 )
                 state_tensors.append(s_t)
                 action_tensors.append(a_t)

@@ -161,7 +161,7 @@ class TemporalAttention(nn.Module):
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding"""
 
-    def __init__(self, d_model: int, max_len: int = 200):
+    def __init__(self, d_model: int, max_len: int = 512):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)

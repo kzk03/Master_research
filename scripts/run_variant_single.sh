@@ -78,6 +78,7 @@ run_eval() {
         --device cuda \
         --n-jobs 4 \
         --output-dir "$eval_dir" \
+        --calibrate \
         $importance_flag
     echo "[$VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
 }
