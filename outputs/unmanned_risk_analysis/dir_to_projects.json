@@ -1,0 +1,1510 @@
+{
+  ".": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/horizon",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  ".cache/v": [
+    "openstack/nova"
+  ],
+  ".idea": [
+    "openstack/keystone",
+    "openstack/horizon"
+  ],
+  ".idea/inspectionProfiles": [
+    "openstack/keystone",
+    "openstack/horizon"
+  ],
+  ".mypy_cache/3.12": [
+    "openstack/neutron"
+  ],
+  ".vscode": [
+    "openstack/swift"
+  ],
+  ".zuul.d": [
+    "openstack/horizon"
+  ],
+  "api-guide/source": [
+    "openstack/nova"
+  ],
+  "api-ref": [
+    "openstack/ironic",
+    "openstack/keystone"
+  ],
+  "api-ref/openapi": [
+    "openstack/keystone"
+  ],
+  "api-ref/source": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "bin": [
+    "openstack/neutron",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "bug-1571312": [
+    "openstack/swift"
+  ],
+  "cinder": [
+    "openstack/cinder"
+  ],
+  "cinder/api": [
+    "openstack/cinder"
+  ],
+  "cinder/backup": [
+    "openstack/cinder"
+  ],
+  "cinder/brick": [
+    "openstack/cinder"
+  ],
+  "cinder/cmd": [
+    "openstack/cinder"
+  ],
+  "cinder/common": [
+    "openstack/cinder"
+  ],
+  "cinder/compute": [
+    "openstack/cinder"
+  ],
+  "cinder/db": [
+    "openstack/cinder"
+  ],
+  "cinder/group": [
+    "openstack/cinder"
+  ],
+  "cinder/image": [
+    "openstack/cinder"
+  ],
+  "cinder/interface": [
+    "openstack/cinder"
+  ],
+  "cinder/keymgr": [
+    "openstack/cinder"
+  ],
+  "cinder/locale": [
+    "openstack/cinder"
+  ],
+  "cinder/message": [
+    "openstack/cinder"
+  ],
+  "cinder/objects": [
+    "openstack/cinder"
+  ],
+  "cinder/policies": [
+    "openstack/cinder"
+  ],
+  "cinder/privileged": [
+    "openstack/cinder"
+  ],
+  "cinder/privsep": [
+    "openstack/cinder"
+  ],
+  "cinder/quota": [
+    "openstack/cinder"
+  ],
+  "cinder/releasenotes": [
+    "openstack/cinder"
+  ],
+  "cinder/scheduler": [
+    "openstack/cinder"
+  ],
+  "cinder/tests": [
+    "openstack/cinder"
+  ],
+  "cinder/transfer": [
+    "openstack/cinder"
+  ],
+  "cinder/volume": [
+    "openstack/cinder"
+  ],
+  "cinder/wsgi": [
+    "openstack/cinder"
+  ],
+  "cinder/zonemanager": [
+    "openstack/cinder"
+  ],
+  "contrib": [
+    "openstack/nova"
+  ],
+  "contrib/block-box": [
+    "openstack/cinder"
+  ],
+  "contrib/heat_docker": [
+    "openstack/heat"
+  ],
+  "devstack": [
+    "openstack/nova",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "devstack/contrib": [
+    "openstack/octavia"
+  ],
+  "devstack/etc": [
+    "openstack/octavia"
+  ],
+  "devstack/files": [
+    "openstack/ironic",
+    "openstack/keystone",
+    "openstack/octavia"
+  ],
+  "devstack/lib": [
+    "openstack/nova",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "devstack/pregenerated": [
+    "openstack/octavia"
+  ],
+  "devstack/samples": [
+    "openstack/octavia"
+  ],
+  "devstack/tools": [
+    "openstack/ironic",
+    "openstack/keystone"
+  ],
+  "devstack/upgrade": [
+    "openstack/ironic",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "diskimage-create": [
+    "openstack/octavia"
+  ],
+  "doc": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/horizon",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "doc/api_samples": [
+    "openstack/nova"
+  ],
+  "doc/api_schemas": [
+    "openstack/nova"
+  ],
+  "doc/ext": [
+    "openstack/nova",
+    "openstack/cinder"
+  ],
+  "doc/manpages": [
+    "openstack/swift"
+  ],
+  "doc/notification_samples": [
+    "openstack/nova"
+  ],
+  "doc/s3api": [
+    "openstack/swift"
+  ],
+  "doc/saio": [
+    "openstack/swift"
+  ],
+  "doc/source": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/horizon",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "doc/test": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/glance"
+  ],
+  "docker": [
+    "openstack/swift"
+  ],
+  "docker/install_scripts": [
+    "openstack/swift"
+  ],
+  "docker/rootfs": [
+    "openstack/swift"
+  ],
+  "elements/amphora-agent": [
+    "openstack/octavia"
+  ],
+  "elements/amphora-agent-opensuse": [
+    "openstack/octavia"
+  ],
+  "elements/amphora-agent-suse": [
+    "openstack/octavia"
+  ],
+  "elements/amphora-apparmor": [
+    "openstack/octavia"
+  ],
+  "elements/amphora-fips": [
+    "openstack/octavia"
+  ],
+  "elements/amphora-selinux": [
+    "openstack/octavia"
+  ],
+  "elements/certs-ramfs": [
+    "openstack/octavia"
+  ],
+  "elements/cpu-pinning": [
+    "openstack/octavia"
+  ],
+  "elements/disable-makecache": [
+    "openstack/octavia"
+  ],
+  "elements/dpdk": [
+    "openstack/octavia"
+  ],
+  "elements/frr": [
+    "openstack/octavia"
+  ],
+  "elements/haproxy-octavia": [
+    "openstack/octavia"
+  ],
+  "elements/haproxy-octavia-opensuse": [
+    "openstack/octavia"
+  ],
+  "elements/haproxy-octavia-suse": [
+    "openstack/octavia"
+  ],
+  "elements/haproxy-source-octavia": [
+    "openstack/octavia"
+  ],
+  "elements/ipvsadmin": [
+    "openstack/octavia"
+  ],
+  "elements/kdump": [
+    "openstack/octavia"
+  ],
+  "elements/keepalived-octavia": [
+    "openstack/octavia"
+  ],
+  "elements/netcat": [
+    "openstack/octavia"
+  ],
+  "elements/no-resolvconf": [
+    "openstack/octavia"
+  ],
+  "elements/octavia-lib": [
+    "openstack/octavia"
+  ],
+  "elements/openstack-selinux": [
+    "openstack/octavia"
+  ],
+  "elements/rebind-sshd": [
+    "openstack/octavia"
+  ],
+  "elements/remove-sshd": [
+    "openstack/octavia"
+  ],
+  "elements/systemd": [
+    "openstack/octavia"
+  ],
+  "elements/tuned-tuna": [
+    "openstack/octavia"
+  ],
+  "etc": [
+    "openstack/neutron",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/swift",
+    "openstack/octavia"
+  ],
+  "etc/apache2": [
+    "openstack/ironic"
+  ],
+  "etc/audit": [
+    "openstack/octavia"
+  ],
+  "etc/cinder": [
+    "openstack/cinder"
+  ],
+  "etc/config": [
+    "openstack/octavia"
+  ],
+  "etc/dhcp": [
+    "openstack/octavia"
+  ],
+  "etc/grafana": [
+    "openstack/octavia"
+  ],
+  "etc/heat": [
+    "openstack/heat"
+  ],
+  "etc/ironic": [
+    "openstack/ironic"
+  ],
+  "etc/metadefs": [
+    "openstack/glance"
+  ],
+  "etc/neutron": [
+    "openstack/neutron"
+  ],
+  "etc/nova": [
+    "openstack/nova"
+  ],
+  "etc/oslo-config-generator": [
+    "openstack/neutron",
+    "openstack/glance",
+    "openstack/octavia"
+  ],
+  "etc/policy": [
+    "openstack/octavia"
+  ],
+  "examples/apache2": [
+    "openstack/swift"
+  ],
+  "examples/basic-account-watcher": [
+    "openstack/swift"
+  ],
+  "flava/.githooks": [
+    "openstack/nova"
+  ],
+  "gate": [
+    "openstack/nova"
+  ],
+  "gate/live_migration": [
+    "openstack/nova"
+  ],
+  "glance": [
+    "openstack/glance"
+  ],
+  "glance/api": [
+    "openstack/glance"
+  ],
+  "glance/async": [
+    "openstack/glance"
+  ],
+  "glance/async_": [
+    "openstack/glance"
+  ],
+  "glance/cmd": [
+    "openstack/glance"
+  ],
+  "glance/common": [
+    "openstack/glance"
+  ],
+  "glance/db": [
+    "openstack/glance"
+  ],
+  "glance/domain": [
+    "openstack/glance"
+  ],
+  "glance/glare": [
+    "openstack/glance"
+  ],
+  "glance/hacking": [
+    "openstack/glance"
+  ],
+  "glance/image_cache": [
+    "openstack/glance"
+  ],
+  "glance/locale": [
+    "openstack/glance"
+  ],
+  "glance/policies": [
+    "openstack/glance"
+  ],
+  "glance/quota": [
+    "openstack/glance"
+  ],
+  "glance/registry": [
+    "openstack/glance"
+  ],
+  "glance/tests": [
+    "openstack/glance"
+  ],
+  "glance/wsgi": [
+    "openstack/glance"
+  ],
+  "go": [
+    "openstack/swift"
+  ],
+  "go/Godeps": [
+    "openstack/swift"
+  ],
+  "go/accountserver": [
+    "openstack/swift"
+  ],
+  "go/bench": [
+    "openstack/swift"
+  ],
+  "go/client": [
+    "openstack/swift"
+  ],
+  "go/cmd": [
+    "openstack/swift"
+  ],
+  "go/containerserver": [
+    "openstack/swift"
+  ],
+  "go/deb_package": [
+    "openstack/swift"
+  ],
+  "go/hummingbird": [
+    "openstack/swift"
+  ],
+  "go/middleware": [
+    "openstack/swift"
+  ],
+  "go/objectserver": [
+    "openstack/swift"
+  ],
+  "go/probe": [
+    "openstack/swift"
+  ],
+  "go/proxyserver": [
+    "openstack/swift"
+  ],
+  "go/swift-rpc-losf": [
+    "openstack/swift"
+  ],
+  "go/vendor": [
+    "openstack/swift"
+  ],
+  "go/xattr": [
+    "openstack/swift"
+  ],
+  "heat/api": [
+    "openstack/heat"
+  ],
+  "heat/cloudinit": [
+    "openstack/heat"
+  ],
+  "heat/cmd": [
+    "openstack/heat"
+  ],
+  "heat/common": [
+    "openstack/heat"
+  ],
+  "heat/db": [
+    "openstack/heat"
+  ],
+  "heat/engine": [
+    "openstack/heat"
+  ],
+  "heat/hacking": [
+    "openstack/heat"
+  ],
+  "heat/httpd": [
+    "openstack/heat"
+  ],
+  "heat/locale": [
+    "openstack/heat"
+  ],
+  "heat/objects": [
+    "openstack/heat"
+  ],
+  "heat/policies": [
+    "openstack/heat"
+  ],
+  "heat/rpc": [
+    "openstack/heat"
+  ],
+  "heat/scaling": [
+    "openstack/heat"
+  ],
+  "heat/tests": [
+    "openstack/heat"
+  ],
+  "heat/wsgi": [
+    "openstack/heat"
+  ],
+  "heat_integrationtests": [
+    "openstack/heat"
+  ],
+  "heat_integrationtests/common": [
+    "openstack/heat"
+  ],
+  "heat_integrationtests/functional": [
+    "openstack/heat"
+  ],
+  "heat_integrationtests/scenario": [
+    "openstack/heat"
+  ],
+  "heat_upgradetests": [
+    "openstack/heat"
+  ],
+  "horizon": [
+    "openstack/horizon"
+  ],
+  "horizon/browsers": [
+    "openstack/horizon"
+  ],
+  "horizon/conf": [
+    "openstack/horizon"
+  ],
+  "horizon/contrib": [
+    "openstack/horizon"
+  ],
+  "horizon/forms": [
+    "openstack/horizon"
+  ],
+  "horizon/hacking": [
+    "openstack/horizon"
+  ],
+  "horizon/locale": [
+    "openstack/horizon"
+  ],
+  "horizon/management": [
+    "openstack/horizon"
+  ],
+  "horizon/middleware": [
+    "openstack/horizon"
+  ],
+  "horizon/static": [
+    "openstack/horizon"
+  ],
+  "horizon/tables": [
+    "openstack/horizon"
+  ],
+  "horizon/tabs": [
+    "openstack/horizon"
+  ],
+  "horizon/templates": [
+    "openstack/horizon"
+  ],
+  "horizon/templatetags": [
+    "openstack/horizon"
+  ],
+  "horizon/test": [
+    "openstack/horizon"
+  ],
+  "horizon/utils": [
+    "openstack/horizon"
+  ],
+  "horizon/workflows": [
+    "openstack/horizon"
+  ],
+  "htmlcov": [
+    "openstack/swift"
+  ],
+  "httpd": [
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/octavia"
+  ],
+  "install-guide/source": [
+    "openstack/heat"
+  ],
+  "ironic": [
+    "openstack/ironic"
+  ],
+  "ironic/api": [
+    "openstack/ironic"
+  ],
+  "ironic/cmd": [
+    "openstack/ironic"
+  ],
+  "ironic/command": [
+    "openstack/ironic"
+  ],
+  "ironic/common": [
+    "openstack/ironic"
+  ],
+  "ironic/conductor": [
+    "openstack/ironic"
+  ],
+  "ironic/conf": [
+    "openstack/ironic"
+  ],
+  "ironic/console": [
+    "openstack/ironic"
+  ],
+  "ironic/constants": [
+    "openstack/ironic"
+  ],
+  "ironic/credentials": [
+    "openstack/ironic"
+  ],
+  "ironic/db": [
+    "openstack/ironic"
+  ],
+  "ironic/dhcp": [
+    "openstack/ironic"
+  ],
+  "ironic/drivers": [
+    "openstack/ironic"
+  ],
+  "ironic/hacking": [
+    "openstack/ironic"
+  ],
+  "ironic/locking": [
+    "openstack/ironic"
+  ],
+  "ironic/networking": [
+    "openstack/ironic"
+  ],
+  "ironic/objects": [
+    "openstack/ironic"
+  ],
+  "ironic/privsep": [
+    "openstack/ironic"
+  ],
+  "ironic/pxe_filter": [
+    "openstack/ironic"
+  ],
+  "ironic/redfish_proxy": [
+    "openstack/ironic"
+  ],
+  "ironic/releasenotes": [
+    "openstack/ironic"
+  ],
+  "ironic/tests": [
+    "openstack/ironic"
+  ],
+  "ironic/wsgi": [
+    "openstack/ironic"
+  ],
+  "ironic_tempest_plugin": [
+    "openstack/ironic"
+  ],
+  "ironic_tempest_plugin/services": [
+    "openstack/ironic"
+  ],
+  "ironic_tempest_plugin/tests": [
+    "openstack/ironic"
+  ],
+  "keystone": [
+    "openstack/keystone"
+  ],
+  "keystone/api": [
+    "openstack/keystone"
+  ],
+  "keystone/application_credential": [
+    "openstack/keystone"
+  ],
+  "keystone/assignment": [
+    "openstack/keystone"
+  ],
+  "keystone/auth": [
+    "openstack/keystone"
+  ],
+  "keystone/catalog": [
+    "openstack/keystone"
+  ],
+  "keystone/cmd": [
+    "openstack/keystone"
+  ],
+  "keystone/common": [
+    "openstack/keystone"
+  ],
+  "keystone/conf": [
+    "openstack/keystone"
+  ],
+  "keystone/contrib": [
+    "openstack/keystone"
+  ],
+  "keystone/credential": [
+    "openstack/keystone"
+  ],
+  "keystone/endpoint_policy": [
+    "openstack/keystone"
+  ],
+  "keystone/federation": [
+    "openstack/keystone"
+  ],
+  "keystone/identity": [
+    "openstack/keystone"
+  ],
+  "keystone/limit": [
+    "openstack/keystone"
+  ],
+  "keystone/middleware": [
+    "openstack/keystone"
+  ],
+  "keystone/models": [
+    "openstack/keystone"
+  ],
+  "keystone/oauth1": [
+    "openstack/keystone"
+  ],
+  "keystone/oauth2": [
+    "openstack/keystone"
+  ],
+  "keystone/policy": [
+    "openstack/keystone"
+  ],
+  "keystone/receipt": [
+    "openstack/keystone"
+  ],
+  "keystone/resource": [
+    "openstack/keystone"
+  ],
+  "keystone/revoke": [
+    "openstack/keystone"
+  ],
+  "keystone/server": [
+    "openstack/keystone"
+  ],
+  "keystone/tests": [
+    "openstack/keystone"
+  ],
+  "keystone/token": [
+    "openstack/keystone"
+  ],
+  "keystone/trust": [
+    "openstack/keystone"
+  ],
+  "keystone/version": [
+    "openstack/keystone"
+  ],
+  "keystone/wsgi": [
+    "openstack/keystone"
+  ],
+  "keystone_tempest_plugin": [
+    "openstack/keystone"
+  ],
+  "neutron": [
+    "openstack/neutron"
+  ],
+  "neutron/agent": [
+    "openstack/neutron"
+  ],
+  "neutron/api": [
+    "openstack/neutron"
+  ],
+  "neutron/cmd": [
+    "openstack/neutron"
+  ],
+  "neutron/common": [
+    "openstack/neutron"
+  ],
+  "neutron/conf": [
+    "openstack/neutron"
+  ],
+  "neutron/core_extensions": [
+    "openstack/neutron"
+  ],
+  "neutron/db": [
+    "openstack/neutron"
+  ],
+  "neutron/debug": [
+    "openstack/neutron"
+  ],
+  "neutron/exceptions": [
+    "openstack/neutron"
+  ],
+  "neutron/extensions": [
+    "openstack/neutron"
+  ],
+  "neutron/hacking": [
+    "openstack/neutron"
+  ],
+  "neutron/ipam": [
+    "openstack/neutron"
+  ],
+  "neutron/notifiers": [
+    "openstack/neutron"
+  ],
+  "neutron/objects": [
+    "openstack/neutron"
+  ],
+  "neutron/ovsdb": [
+    "openstack/neutron"
+  ],
+  "neutron/pecan_wsgi": [
+    "openstack/neutron"
+  ],
+  "neutron/plugins": [
+    "openstack/neutron"
+  ],
+  "neutron/privileged": [
+    "openstack/neutron"
+  ],
+  "neutron/profiling": [
+    "openstack/neutron"
+  ],
+  "neutron/quota": [
+    "openstack/neutron"
+  ],
+  "neutron/releasenotes": [
+    "openstack/neutron"
+  ],
+  "neutron/scheduler": [
+    "openstack/neutron"
+  ],
+  "neutron/server": [
+    "openstack/neutron"
+  ],
+  "neutron/services": [
+    "openstack/neutron"
+  ],
+  "neutron/tests": [
+    "openstack/neutron"
+  ],
+  "neutron/wsgi": [
+    "openstack/neutron"
+  ],
+  "nova": [
+    "openstack/nova"
+  ],
+  "nova/accelerator": [
+    "openstack/nova"
+  ],
+  "nova/api": [
+    "openstack/nova"
+  ],
+  "nova/bin": [
+    "openstack/nova"
+  ],
+  "nova/cmd": [
+    "openstack/nova"
+  ],
+  "nova/compute": [
+    "openstack/nova"
+  ],
+  "nova/conductor": [
+    "openstack/nova"
+  ],
+  "nova/conf": [
+    "openstack/nova"
+  ],
+  "nova/console": [
+    "openstack/nova"
+  ],
+  "nova/consoleauth": [
+    "openstack/nova"
+  ],
+  "nova/db": [
+    "openstack/nova"
+  ],
+  "nova/hacking": [
+    "openstack/nova"
+  ],
+  "nova/healthcheck": [
+    "openstack/nova"
+  ],
+  "nova/image": [
+    "openstack/nova"
+  ],
+  "nova/ipv6": [
+    "openstack/nova"
+  ],
+  "nova/keymgr": [
+    "openstack/nova"
+  ],
+  "nova/limit": [
+    "openstack/nova"
+  ],
+  "nova/limits": [
+    "openstack/nova"
+  ],
+  "nova/network": [
+    "openstack/nova"
+  ],
+  "nova/notifications": [
+    "openstack/nova"
+  ],
+  "nova/objects": [
+    "openstack/nova"
+  ],
+  "nova/openstack": [
+    "openstack/nova"
+  ],
+  "nova/pci": [
+    "openstack/nova"
+  ],
+  "nova/policies": [
+    "openstack/nova"
+  ],
+  "nova/privsep": [
+    "openstack/nova"
+  ],
+  "nova/releasenotes": [
+    "openstack/nova"
+  ],
+  "nova/scheduler": [
+    "openstack/nova"
+  ],
+  "nova/servicegroup": [
+    "openstack/nova"
+  ],
+  "nova/share": [
+    "openstack/nova"
+  ],
+  "nova/storage": [
+    "openstack/nova"
+  ],
+  "nova/tests": [
+    "openstack/nova"
+  ],
+  "nova/tools": [
+    "openstack/nova"
+  ],
+  "nova/virt": [
+    "openstack/nova"
+  ],
+  "nova/vnc": [
+    "openstack/nova"
+  ],
+  "nova/volume": [
+    "openstack/nova"
+  ],
+  "nova/wsgi": [
+    "openstack/nova"
+  ],
+  "octavia": [
+    "openstack/octavia"
+  ],
+  "octavia/amphorae": [
+    "openstack/octavia"
+  ],
+  "octavia/api": [
+    "openstack/octavia"
+  ],
+  "octavia/certificates": [
+    "openstack/octavia"
+  ],
+  "octavia/cmd": [
+    "openstack/octavia"
+  ],
+  "octavia/common": [
+    "openstack/octavia"
+  ],
+  "octavia/compute": [
+    "openstack/octavia"
+  ],
+  "octavia/controller": [
+    "openstack/octavia"
+  ],
+  "octavia/db": [
+    "openstack/octavia"
+  ],
+  "octavia/distributor": [
+    "openstack/octavia"
+  ],
+  "octavia/hacking": [
+    "openstack/octavia"
+  ],
+  "octavia/image": [
+    "openstack/octavia"
+  ],
+  "octavia/network": [
+    "openstack/octavia"
+  ],
+  "octavia/policies": [
+    "openstack/octavia"
+  ],
+  "octavia/statistics": [
+    "openstack/octavia"
+  ],
+  "octavia/tests": [
+    "openstack/octavia"
+  ],
+  "octavia/volume": [
+    "openstack/octavia"
+  ],
+  "octavia/wsgi": [
+    "openstack/octavia"
+  ],
+  "openstack_auth": [
+    "openstack/horizon"
+  ],
+  "openstack_auth/locale": [
+    "openstack/horizon"
+  ],
+  "openstack_auth/plugin": [
+    "openstack/horizon"
+  ],
+  "openstack_auth/tests": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/api": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/conf": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/contrib": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/dashboards": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/django_pyscss_fix": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/enabled": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/local": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/locale": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/management": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/static": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/templates": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/templatetags": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/test": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/themes": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/usage": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/utils": [
+    "openstack/horizon"
+  ],
+  "openstack_dashboard/wsgi": [
+    "openstack/horizon"
+  ],
+  "os_brick/initiator": [
+    "openstack/cinder"
+  ],
+  "os_brick/tests": [
+    "openstack/cinder"
+  ],
+  "placement-api-ref/source": [
+    "openstack/nova"
+  ],
+  "playbooks": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/horizon",
+    "openstack/octavia"
+  ],
+  "playbooks/alpine": [
+    "openstack/nova"
+  ],
+  "playbooks/ceph": [
+    "openstack/nova"
+  ],
+  "playbooks/ci-workarounds": [
+    "openstack/ironic"
+  ],
+  "playbooks/cinder-tempest-dsvm-devstack-plugin-nfs": [
+    "openstack/cinder"
+  ],
+  "playbooks/cross-jobs": [
+    "openstack/horizon"
+  ],
+  "playbooks/devstack": [
+    "openstack/heat"
+  ],
+  "playbooks/george": [
+    "openstack/neutron"
+  ],
+  "playbooks/grenade-multinode": [
+    "openstack/nova"
+  ],
+  "playbooks/horizon-devstack-integration": [
+    "openstack/horizon"
+  ],
+  "playbooks/horizon-liveserver-ui": [
+    "openstack/horizon"
+  ],
+  "playbooks/horizon-nodejs": [
+    "openstack/horizon"
+  ],
+  "playbooks/horizon-nodejs10": [
+    "openstack/horizon"
+  ],
+  "playbooks/horizon-nodejs10-run-test": [
+    "openstack/horizon"
+  ],
+  "playbooks/horizon-tox-django": [
+    "openstack/horizon"
+  ],
+  "playbooks/image-build": [
+    "openstack/octavia"
+  ],
+  "playbooks/irso-ci": [
+    "openstack/ironic"
+  ],
+  "playbooks/kernel-panic": [
+    "openstack/nova"
+  ],
+  "playbooks/keystone-osh-functional": [
+    "openstack/keystone"
+  ],
+  "playbooks/keystone-osh-functional-local": [
+    "openstack/keystone"
+  ],
+  "playbooks/legacy": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/octavia"
+  ],
+  "playbooks/metal3-ci": [
+    "openstack/ironic"
+  ],
+  "playbooks/nfv": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-disk-encryption": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-emulation": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-evacuate": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-live-migration": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-live-migration-ceph": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-mtty": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-next": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-rally-fake-virt-threading": [
+    "openstack/nova"
+  ],
+  "playbooks/nova-resume": [
+    "openstack/nova"
+  ],
+  "playbooks/npm-test-xstatic-master": [
+    "openstack/horizon"
+  ],
+  "quantum/plugins": [
+    "openstack/neutron"
+  ],
+  "rally-jobs": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron"
+  ],
+  "rally-jobs/extra": [
+    "openstack/neutron"
+  ],
+  "rally-jobs/plugins": [
+    "openstack/neutron"
+  ],
+  "redfish-interop-profiles": [
+    "openstack/ironic"
+  ],
+  "redfish-interop-profiles/drivers": [
+    "openstack/ironic"
+  ],
+  "releasenotes": [
+    "openstack/ironic",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "releasenotes/extras": [
+    "openstack/cinder"
+  ],
+  "releasenotes/notes": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/horizon",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "releasenotes/releasenotes": [
+    "openstack/neutron"
+  ],
+  "releasenotes/source": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/horizon",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "roles/add_mariadb_repo": [
+    "openstack/neutron"
+  ],
+  "roles/additional-keystone-users": [
+    "openstack/swift"
+  ],
+  "roles/additional-tempauth-users": [
+    "openstack/swift"
+  ],
+  "roles/build_alpine": [
+    "openstack/nova"
+  ],
+  "roles/compare-rally-runs": [
+    "openstack/nova"
+  ],
+  "roles/configure-native-threading": [
+    "openstack/nova"
+  ],
+  "roles/configure-run-migration-tests": [
+    "openstack/cinder"
+  ],
+  "roles/configure_functional_tests": [
+    "openstack/neutron"
+  ],
+  "roles/disable_selinux": [
+    "openstack/neutron"
+  ],
+  "roles/dsvm-additional-middlewares": [
+    "openstack/swift"
+  ],
+  "roles/ensure-django": [
+    "openstack/horizon"
+  ],
+  "roles/fetch-video-output": [
+    "openstack/horizon"
+  ],
+  "roles/fetch_journal_log": [
+    "openstack/neutron"
+  ],
+  "roles/legacy_ebtables": [
+    "openstack/neutron"
+  ],
+  "roles/nftables": [
+    "openstack/neutron"
+  ],
+  "roles/openvswitch_selinux": [
+    "openstack/neutron"
+  ],
+  "roles/prepare_functional_tests_logs": [
+    "openstack/neutron"
+  ],
+  "roles/rerun-rally": [
+    "openstack/nova"
+  ],
+  "roles/run-emulation-check": [
+    "openstack/nova"
+  ],
+  "roles/run-evacuate-hook": [
+    "openstack/nova"
+  ],
+  "roles/run-heat-tests": [
+    "openstack/heat"
+  ],
+  "roles/run-live-migration-hook": [
+    "openstack/nova"
+  ],
+  "roles/run-resume-guests-hook": [
+    "openstack/nova"
+  ],
+  "roles/save-cinder-migration-results": [
+    "openstack/cinder"
+  ],
+  "roles/setup-disk-encryption-policy": [
+    "openstack/nova"
+  ],
+  "roles/setup-selenium-tests": [
+    "openstack/horizon"
+  ],
+  "spec/support": [
+    "openstack/horizon"
+  ],
+  "specs": [
+    "openstack/octavia"
+  ],
+  "specs-tests": [
+    "openstack/octavia"
+  ],
+  "specs/version0.5": [
+    "openstack/octavia"
+  ],
+  "specs/version0.8": [
+    "openstack/octavia"
+  ],
+  "specs/version1.1": [
+    "openstack/octavia"
+  ],
+  "specs/version1.2": [
+    "openstack/octavia"
+  ],
+  "specs/version11": [
+    "openstack/octavia"
+  ],
+  "specs/version11.0": [
+    "openstack/octavia"
+  ],
+  "specs/version13.0": [
+    "openstack/octavia"
+  ],
+  "specs/version14.0": [
+    "openstack/octavia"
+  ],
+  "specs/version15.0": [
+    "openstack/octavia"
+  ],
+  "specs/version16.0": [
+    "openstack/octavia"
+  ],
+  "specs/version17.0": [
+    "openstack/octavia"
+  ],
+  "static/app": [
+    "openstack/horizon"
+  ],
+  "swift": [
+    "openstack/swift"
+  ],
+  "swift/account": [
+    "openstack/swift"
+  ],
+  "swift/cli": [
+    "openstack/swift"
+  ],
+  "swift/common": [
+    "openstack/swift"
+  ],
+  "swift/container": [
+    "openstack/swift"
+  ],
+  "swift/locale": [
+    "openstack/swift"
+  ],
+  "swift/obj": [
+    "openstack/swift"
+  ],
+  "swift/proxy": [
+    "openstack/swift"
+  ],
+  "test": [
+    "openstack/swift"
+  ],
+  "test/cors": [
+    "openstack/swift"
+  ],
+  "test/functional": [
+    "openstack/swift"
+  ],
+  "test/probe": [
+    "openstack/swift"
+  ],
+  "test/s3api": [
+    "openstack/swift"
+  ],
+  "test/unit": [
+    "openstack/swift"
+  ],
+  "tests/unit": [
+    "openstack/ironic"
+  ],
+  "tools": [
+    "openstack/nova",
+    "openstack/cinder",
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/glance",
+    "openstack/keystone",
+    "openstack/horizon",
+    "openstack/swift",
+    "openstack/heat",
+    "openstack/octavia"
+  ],
+  "tools/benchmark": [
+    "openstack/ironic"
+  ],
+  "tools/bug_deputy": [
+    "openstack/ironic"
+  ],
+  "tools/config": [
+    "openstack/cinder",
+    "openstack/ironic"
+  ],
+  "tools/dashboards": [
+    "openstack/heat"
+  ],
+  "tools/db": [
+    "openstack/nova"
+  ],
+  "tools/gate": [
+    "openstack/horizon"
+  ],
+  "tools/hooks": [
+    "openstack/nova",
+    "openstack/cinder"
+  ],
+  "tools/networking": [
+    "openstack/ironic"
+  ],
+  "tools/ovn_migration": [
+    "openstack/neutron"
+  ],
+  "tools/ovn_vagrant": [
+    "openstack/neutron"
+  ],
+  "tools/playbooks": [
+    "openstack/swift"
+  ],
+  "tools/policy": [
+    "openstack/ironic"
+  ],
+  "tools/trait_based_networking": [
+    "openstack/ironic"
+  ],
+  "tools/tripleo": [
+    "openstack/neutron"
+  ],
+  "tools/vnc-container": [
+    "openstack/ironic"
+  ],
+  "tools/xenserver": [
+    "openstack/nova"
+  ],
+  "vagrant/ovn": [
+    "openstack/neutron"
+  ],
+  "zuul.d": [
+    "openstack/neutron",
+    "openstack/ironic",
+    "openstack/octavia"
+  ]
+}
