@@ -1212,7 +1212,8 @@ class RetentionIRLSystem:
                                        expert_trajectories: List[Dict[str, Any]],
                                        epochs: int = 50,
                                        patience: int = 5,
-                                       val_ratio: float = 0.2) -> Dict[str, Any]:
+                                       val_ratio: float = 0.2,
+                                       batch_size: int = 32) -> Dict[str, Any]:
         """
         時系列軌跡データを用いた逆強化学習（IRL）モデルの訓練
 
@@ -1402,25 +1403,23 @@ class RetentionIRLSystem:
                 delayed(_extract_one)(t) for t in trajectories_list
             )
 
-            # numpy → torch テンソルに変換（メインスレッドで高速）
+            # numpy → torch テンソルに変換（[L, dim] / [L] 形状で保持、バッチ次元はcollate時に追加）
             precomputed = []
             for raw in raw_results:
                 if raw is None:
                     continue
                 min_len = raw['min_len']
-                state_seq = torch.tensor(raw['state_vecs'], dtype=torch.float32, device=device).unsqueeze(0)
-                action_seq = torch.tensor(raw['action_vecs'], dtype=torch.float32, device=device).unsqueeze(0)
-                length = torch.tensor([min_len], dtype=torch.long, device=device)
+                state_seq = torch.tensor(raw['state_vecs'], dtype=torch.float32, device=device)   # [L, state_dim]
+                action_seq = torch.tensor(raw['action_vecs'], dtype=torch.float32, device=device) # [L, action_dim]
                 targets = torch.tensor(
                     [1.0 if l else 0.0 for l in raw['step_labels'][:min_len]],
                     device=device,
-                )
-                sample_w = torch.full([min_len], raw['sample_weight'], device=device)
+                )                                                                                  # [L]
+                sample_w = torch.full([min_len], raw['sample_weight'], device=device)              # [L]
 
                 entry = {
                     'state_seq': state_seq,
                     'action_seq': action_seq,
-                    'length': length,
                     'targets': targets,
                     'sample_weights': sample_w,
                     'min_len': min_len,
@@ -1435,6 +1434,89 @@ class RetentionIRLSystem:
         train_data = _precompute_features(train_trajectories, "train")
         val_data = _precompute_features(val_trajectories, "val")
         logger.info(f"特徴量事前計算完了: train={len(train_data)}, val={len(val_data)}")
+        total_train_steps = sum(e['min_len'] for e in train_data)
+        total_val_steps = sum(e['min_len'] for e in val_data)
+        logger.info(f"総ステップ数: train={total_train_steps}, val={total_val_steps} (batch_size={batch_size})")
+
+        # ── ミニバッチ collate ヘルパー ──
+        def _collate_batches(precomputed_list, bs, shuffle, rng):
+            """[L, dim] エントリ群をパディングして [B, L_max, dim] のバッチにまとめる。"""
+            n = len(precomputed_list)
+            order = list(range(n))
+            if shuffle:
+                rng.shuffle(order)
+            batches = []
+            state_dim = precomputed_list[0]['state_seq'].shape[-1] if n > 0 else self.state_dim
+            action_dim = precomputed_list[0]['action_seq'].shape[-1] if n > 0 else self.action_dim
+            for start in range(0, n, bs):
+                idx_chunk = order[start:start + bs]
+                if not idx_chunk:
+                    continue
+                chunk = [precomputed_list[i] for i in idx_chunk]
+                B = len(chunk)
+                max_len = max(e['min_len'] for e in chunk)
+
+                state_b = torch.zeros(B, max_len, state_dim, device=self.device)
+                action_b = torch.zeros(B, max_len, action_dim, device=self.device)
+                targets_b = torch.zeros(B, max_len, device=self.device)
+                sample_w_b = torch.zeros(B, max_len, device=self.device)
+                mask_b = torch.zeros(B, max_len, device=self.device)
+                lengths = torch.zeros(B, dtype=torch.long, device=self.device)
+                head_label_b = {}
+
+                for bi, entry in enumerate(chunk):
+                    L = entry['min_len']
+                    state_b[bi, :L] = entry['state_seq']
+                    action_b[bi, :L] = entry['action_seq']
+                    targets_b[bi, :L] = entry['targets']
+                    sample_w_b[bi, :L] = entry['sample_weights']
+                    mask_b[bi, :L] = 1.0
+                    lengths[bi] = L
+
+                    slpw = entry.get('step_labels_per_window')
+                    if slpw:
+                        for head_idx in range(4):
+                            window_key = f"{head_idx * 3}-{head_idx * 3 + 3}"
+                            head_labels = slpw.get(window_key, entry['step_labels'][:L])
+                            if head_idx not in head_label_b:
+                                head_label_b[head_idx] = torch.zeros(B, max_len, device=self.device)
+                            head_label_b[head_idx][bi, :L] = torch.tensor(
+                                [1.0 if l else 0.0 for l in head_labels[:L]],
+                                dtype=torch.float32, device=self.device,
+                            )
+
+                batches.append({
+                    'state_seq': state_b,
+                    'action_seq': action_b,
+                    'lengths': lengths,
+                    'targets': targets_b,
+                    'sample_weights': sample_w_b,
+                    'mask': mask_b,
+                    'head_labels': head_label_b if head_label_b else None,
+                })
+            return batches
+
+        def _masked_focal_loss(predictions, targets, sample_weights, mask):
+            """マスク有り Focal Loss（パディング位置は重み0で除外）。"""
+            pred = predictions.reshape(-1)
+            targ = targets.reshape(-1)
+            sw = sample_weights.reshape(-1)
+            mk = mask.reshape(-1)
+            bce = F.binary_cross_entropy(pred, targ, reduction='none')
+            p_t = pred * targ + (1 - pred) * (1 - targ)
+            alpha_t = self.focal_alpha * targ + (1 - self.focal_alpha) * (1 - targ)
+            focal_w = alpha_t * torch.pow(1 - p_t, self.focal_gamma)
+            loss = focal_w * bce * sw * mk
+            denom = mk.sum().clamp(min=1.0)
+            return loss.sum() / denom
+
+        def _masked_mse(predictions, targets, mask):
+            mse = (predictions.reshape(-1) - targets.reshape(-1)) ** 2
+            mk = mask.reshape(-1)
+            denom = mk.sum().clamp(min=1.0)
+            return (mse * mk).sum() / denom
+
+        rng = random.Random(42)
 
         self.network.train()
         training_losses = []
@@ -1444,68 +1526,57 @@ class RetentionIRLSystem:
         best_state_dict = None
         patience_counter = 0
 
+        # validation バッチは固定（毎エポック同じ順序）
+        val_batches = _collate_batches(val_data, batch_size, shuffle=False, rng=rng)
+
         for epoch in range(epochs):
             self.network.train()
             epoch_loss = 0.0
             batch_count = 0
 
-            for entry in train_data:
+            train_batches = _collate_batches(train_data, batch_size, shuffle=True, rng=rng)
+            for batch in train_batches:
                 try:
                     predicted_reward, predicted_continuation = self.network.forward_all_steps(
-                        entry['state_seq'], entry['action_seq'], entry['length'], return_reward=True
+                        batch['state_seq'], batch['action_seq'], batch['lengths'], return_reward=True
                     )
 
-                    min_len = entry['min_len']
-                    targets = entry['targets']
-                    sample_weights = entry['sample_weights']
+                    targets = batch['targets']
+                    sample_weights = batch['sample_weights']
+                    mask = batch['mask']
+                    reward_targets = targets * 2.0 - 1.0
 
                     if self.model_type != 0 and is_multitask(self.model_type):
-                        predicted_reward_flat = predicted_reward.squeeze(0)
-                        step_labels_per_window = entry.get('step_labels_per_window', {})
-                        step_labels = entry['step_labels']
+                        head_labels = batch['head_labels'] or {}
                         continuation_loss = torch.tensor(0.0, device=self.device)
                         n_active_heads = 0
                         for head_idx, head_pred in predicted_continuation.items():
-                            window_key = f"{head_idx * 3}-{head_idx * 3 + 3}"
-                            head_labels = step_labels_per_window.get(window_key, step_labels[:min_len])
-                            head_targets = torch.tensor(
-                                [1.0 if l else 0.0 for l in head_labels[:min_len]],
-                                device=self.device,
-                            )
-                            if len(head_targets) > 0:
-                                head_pred_flat = head_pred.squeeze(0)
-                                continuation_loss += self.focal_loss(
-                                    head_pred_flat, head_targets, sample_weights
+                            if head_idx in head_labels:
+                                continuation_loss = continuation_loss + _masked_focal_loss(
+                                    head_pred, head_labels[head_idx], sample_weights, mask
                                 )
                                 n_active_heads += 1
                         if n_active_heads > 0:
                             continuation_loss = continuation_loss / n_active_heads
-                        reward_loss = F.mse_loss(
-                            predicted_reward_flat, targets * 2.0 - 1.0
-                        )
+                        reward_loss = _masked_mse(predicted_reward, reward_targets, mask)
                     else:
-                        predicted_reward_flat = predicted_reward.squeeze(0)
-                        predicted_continuation_flat = predicted_continuation.squeeze(0)
-                        continuation_loss = self.focal_loss(
-                            predicted_continuation_flat, targets, sample_weights
+                        continuation_loss = _masked_focal_loss(
+                            predicted_continuation, targets, sample_weights, mask
                         )
-                        reward_loss = F.mse_loss(
-                            predicted_reward_flat, targets * 2.0 - 1.0
-                        )
+                        reward_loss = _masked_mse(predicted_reward, reward_targets, mask)
 
-                    loss_per_step = continuation_loss + reward_loss
+                    loss_per_batch = continuation_loss + reward_loss
 
-                    # バックプロパゲーション（勾配クリッピングで爆発防止）
                     self.optimizer.zero_grad()
-                    loss_per_step.backward()
+                    loss_per_batch.backward()
                     torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                     self.optimizer.step()
 
-                    epoch_loss += loss_per_step.item()
+                    epoch_loss += loss_per_batch.item()
                     batch_count += 1
 
                 except Exception as e:
-                    logger.warning(f"軌跡処理エラー: {e}")
+                    logger.warning(f"バッチ処理エラー: {e}")
                     continue
 
             avg_loss = epoch_loss / max(batch_count, 1)
@@ -1519,34 +1590,34 @@ class RetentionIRLSystem:
             val_loss = 0.0
             val_count = 0
             with torch.no_grad():
-                for entry in val_data:
+                for batch in val_batches:
                     try:
                         predicted_reward, predicted_continuation = self.network.forward_all_steps(
-                            entry['state_seq'], entry['action_seq'], entry['length'], return_reward=True
+                            batch['state_seq'], batch['action_seq'], batch['lengths'], return_reward=True
                         )
-                        min_len = entry['min_len']
-                        targets = entry['targets']
-                        sample_weights = entry['sample_weights']
+                        targets = batch['targets']
+                        sample_weights = batch['sample_weights']
+                        mask = batch['mask']
+                        reward_targets = targets * 2.0 - 1.0
 
                         if self.model_type != 0 and is_multitask(self.model_type):
-                            predicted_reward_flat = predicted_reward.squeeze(0)
-                            step_labels_per_window = entry.get('step_labels_per_window', {})
-                            step_labels = entry['step_labels']
+                            head_labels = batch['head_labels'] or {}
                             c_loss = torch.tensor(0.0, device=self.device)
                             n_heads = 0
                             for hi, hp in predicted_continuation.items():
-                                wk = f"{hi * 3}-{hi * 3 + 3}"
-                                hl = step_labels_per_window.get(wk, step_labels[:min_len])
-                                ht = torch.tensor([1.0 if l else 0.0 for l in hl[:min_len]], device=self.device)
-                                if len(ht) > 0:
-                                    c_loss += self.focal_loss(hp.squeeze(0), ht, sample_weights)
+                                if hi in head_labels:
+                                    c_loss = c_loss + _masked_focal_loss(
+                                        hp, head_labels[hi], sample_weights, mask
+                                    )
                                     n_heads += 1
                             if n_heads > 0:
                                 c_loss = c_loss / n_heads
-                            r_loss = F.mse_loss(predicted_reward_flat, targets * 2.0 - 1.0)
+                            r_loss = _masked_mse(predicted_reward, reward_targets, mask)
                         else:
-                            c_loss = self.focal_loss(predicted_continuation.squeeze(0), targets, sample_weights)
-                            r_loss = F.mse_loss(predicted_reward.squeeze(0), targets * 2.0 - 1.0)
+                            c_loss = _masked_focal_loss(
+                                predicted_continuation, targets, sample_weights, mask
+                            )
+                            r_loss = _masked_mse(predicted_reward, reward_targets, mask)
                         val_loss += (c_loss + r_loss).item()
                         val_count += 1
                     except Exception:

@@ -675,22 +675,22 @@ def _process_one_reviewer_event(
             )
             path_features_per_step.append(pf)
 
-            # イベント固有特徴量
-            lines_changed = (
-                event_row.get('change_insertions', 0) +
-                event_row.get('change_deletions', 0)
-            )
-            response_time = event_row.get('response_latency_days', 0.0)
+            # イベント固有特徴量（NaN は 0.0 に置換）
+            ins = event_row.get('change_insertions', 0)
+            dels = event_row.get('change_deletions', 0)
+            lines_changed = (ins if pd.notna(ins) else 0) + (dels if pd.notna(dels) else 0)
+            rt_raw = event_row.get('response_latency_days', 0.0)
+            response_time = float(rt_raw) if pd.notna(rt_raw) else 0.0
             accepted = 1 if event_row.get(label_col, 0) == 1 else 0
             time_since_prev = (
                 (event_time - prev_event_time).total_seconds() / 86400.0
                 if prev_event_time is not None else 30.0  # default 30 days
             )
             event_features_list.append({
-                'event_lines_changed': min(lines_changed / 2000.0, 1.0),  # normalized
-                'event_response_time': min(response_time / 14.0, 1.0),    # normalized
+                'event_lines_changed': max(0.0, min(lines_changed / 2000.0, 1.0)),
+                'event_response_time': max(0.0, min(response_time / 14.0, 1.0)),
                 'event_accepted': float(accepted),
-                'time_since_prev_event': min(time_since_prev / 180.0, 1.0),
+                'time_since_prev_event': max(0.0, min(time_since_prev / 180.0, 1.0)),
             })
             prev_event_time = event_time
 
@@ -1293,7 +1293,7 @@ def main():
             with open(cache_path, 'rb') as f:
                 train_trajectories = pickle.load(f)
             logger.info(f"キャッシュから {len(train_trajectories)} 軌跡を読み込みました")
-            state_dim = 23 if args.directory_level else 20
+            state_dim = 27 if args.directory_level else 20
         elif args.directory_level:
             # ディレクトリ単位モード
             from review_predictor.IRL.features.path_features import (
@@ -1380,6 +1380,7 @@ def main():
             train_trajectories,
             epochs=args.epochs,
             patience=args.patience,
+            batch_size=args.batch_size,
         )
         
         # 訓練データ上で最適閾値を決定
@@ -1400,6 +1401,7 @@ def main():
                     context_date=traj.get('context_date'),
                     step_total_project_reviews=traj.get('step_total_project_reviews'),
                     step_path_features=traj.get('path_features_per_step'),
+                    step_event_features=traj.get('event_features'),
                 )
                 prob = result.get('continuation_probability', 0.5)
             else:
