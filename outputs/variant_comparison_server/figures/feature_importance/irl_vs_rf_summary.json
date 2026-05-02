@@ -1,0 +1,11 @@
+{
+  "spearman_irl_rf_per_window": {
+    "0-3m": 0.09359605911330049,
+    "3-6m": 0.4176245210727969,
+    "6-9m": 0.1620142309797482,
+    "9-12m": 0.03831417624521073,
+    "mean": 0.17788724685276408
+  },
+  "n_features": 28,
+  "input_dir": "outputs/variant_comparison_server/lstm_baseline"
+}

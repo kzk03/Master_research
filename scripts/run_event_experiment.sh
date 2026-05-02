@@ -16,12 +16,16 @@ export CUDA_VISIBLE_DEVICES="$GPU_ID"
 
 REVIEWS="data/combined_raw.csv"
 RAW_JSON=(data/raw_json/openstack__*.json)
-TRAIN_START="2021-01-01"
-TRAIN_END="2023-01-01"
+TRAIN_START="2019-01-01"
+TRAIN_END="2022-01-01"
 EVAL_CUTOFF="2023-01-01"
 EPOCHS=50
 PATIENCE=5
 OUTBASE="outputs/event_level_experiment"
+
+mkdir -p "$OUTBASE/logs"
+LOG_FILE="${LOG_FILE:-$OUTBASE/logs/main.log}"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 MAX_EVENTS=256
 SLIDING_WINDOW_DAYS=180
