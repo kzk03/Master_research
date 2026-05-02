@@ -1,0 +1,82 @@
+[
+  {
+    "project": "nova",
+    "n_py_files": 1480,
+    "n_parse_err": 0,
+    "n_edges": 857,
+    "commit": "00a62d218d80df9c5edc7f26e025138cc9d710aa",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "neutron",
+    "n_py_files": 1889,
+    "n_parse_err": 0,
+    "n_edges": 730,
+    "commit": "2979cd17fa5ba1e49fd346a02eb8e837e85b5470",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "cinder",
+    "n_py_files": 1263,
+    "n_parse_err": 0,
+    "n_edges": 744,
+    "commit": "d55a004e524f752c228a4a7bda5d24d4223325de",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "glance",
+    "n_py_files": 344,
+    "n_parse_err": 0,
+    "n_edges": 359,
+    "commit": "e2cd7251f46e9d8fe7796ba0e178ee692de98fe6",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "keystone",
+    "n_py_files": 565,
+    "n_parse_err": 0,
+    "n_edges": 496,
+    "commit": "ff632a81fb09e6d9f3298e494d53eb6df50269cf",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "heat",
+    "n_py_files": 846,
+    "n_parse_err": 0,
+    "n_edges": 354,
+    "commit": "b452ea7089cf029ef3268dbfea2024f2304da8af",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "horizon",
+    "n_py_files": 1013,
+    "n_parse_err": 0,
+    "n_edges": 295,
+    "commit": "aec6340398a5d6e65cda926247c2e08dff29ee4d",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "ironic",
+    "n_py_files": 561,
+    "n_parse_err": 0,
+    "n_edges": 340,
+    "commit": "6b84fbf8f2a92fc9c591e26eeec4b69cc1aa2ffe",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "swift",
+    "n_py_files": 372,
+    "n_parse_err": 0,
+    "n_edges": 296,
+    "commit": "2d7c1dc6dd8a672c1f89a46b2423898d33ff63d2",
+    "snapshot_date": "2022-12-31"
+  },
+  {
+    "project": "octavia",
+    "n_py_files": 638,
+    "n_parse_err": 0,
+    "n_edges": 350,
+    "commit": "ac3618b140b1b8ba02f2263abf910c17b3f08aff",
+    "snapshot_date": "2022-12-31"
+  }
+]
