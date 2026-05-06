@@ -73,6 +73,12 @@ def main():
         default=-1,
         help="joblib 並列数 (-1=全コア)",
     )
+    parser.add_argument(
+        "--per-dev",
+        action="store_true",
+        help="軌跡を (dev) 単位で構築する（全 dir 横断、1 reviewer = 1 軌跡）。"
+             "デフォルトは (dev, dir) ペア単位。",
+    )
     parser.add_argument("--output", type=str, required=True, help="出力 .pkl パス")
     args = parser.parse_args()
 
@@ -84,6 +90,7 @@ def main():
     # 既存実装からイベント単位抽出関数とローダを借りる
     from train_model_event import (
         extract_event_level_trajectories,
+        extract_event_level_trajectories_dev_only,
         load_review_requests,
     )
     from review_predictor.IRL.features.path_features import (
@@ -110,21 +117,36 @@ def main():
     })
     path_extractor = PathFeatureExtractor(df_for_path, window_days=180)
 
+    mode_label = "per-dev (全 dir 横断)" if args.per_dev else "(dev, dir) ペア"
     logger.info(
-        f"軌跡抽出開始 [event-level, sliding={args.sliding_window_days}d, "
+        f"軌跡抽出開始 [event-level, mode={mode_label}, "
+        f"sliding={args.sliding_window_days}d, "
         f"max_events={args.max_events}, n_jobs={args.n_jobs}]"
     )
-    trajectories = extract_event_level_trajectories(
-        df,
-        train_start=train_start,
-        train_end=train_end,
-        path_extractor=path_extractor,
-        future_window_start_months=args.future_window_start,
-        future_window_end_months=args.future_window_end,
-        sliding_window_days=args.sliding_window_days,
-        max_events=args.max_events,
-        n_jobs=args.n_jobs,
-    )
+    if args.per_dev:
+        trajectories = extract_event_level_trajectories_dev_only(
+            df,
+            train_start=train_start,
+            train_end=train_end,
+            path_extractor=path_extractor,
+            future_window_start_months=args.future_window_start,
+            future_window_end_months=args.future_window_end,
+            sliding_window_days=args.sliding_window_days,
+            max_events=args.max_events,
+            n_jobs=args.n_jobs,
+        )
+    else:
+        trajectories = extract_event_level_trajectories(
+            df,
+            train_start=train_start,
+            train_end=train_end,
+            path_extractor=path_extractor,
+            future_window_start_months=args.future_window_start,
+            future_window_end_months=args.future_window_end,
+            sliding_window_days=args.sliding_window_days,
+            max_events=args.max_events,
+            n_jobs=args.n_jobs,
+        )
 
     if not trajectories:
         logger.error("軌跡が抽出できませんでした")
@@ -159,7 +181,8 @@ def main():
     with open(output_path, "wb") as f:
         pickle.dump(trajectories, f)
     logger.info(
-        f"保存完了 [MCE-IRL event-level]: {output_path} ({len(trajectories)} 軌跡)"
+        f"保存完了 [MCE-IRL event-level, mode={mode_label}]: "
+        f"{output_path} ({len(trajectories)} 軌跡)"
     )
 
 

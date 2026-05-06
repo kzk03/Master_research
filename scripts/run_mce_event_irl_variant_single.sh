@@ -69,6 +69,15 @@ TRAIN_FE=(3 6 9 12)
 CACHE_DIR="outputs/mce_event_irl_trajectory_cache"
 mkdir -p "$CACHE_DIR"
 
+# warm-start 設定 (環境変数で制御):
+#   INIT_FROM_BASE=outputs/mce_irl_variant_comparison_server/$VNAME を指定すると、
+#   各窓で $INIT_FROM_BASE/train_${win}m/mce_irl_model.pt から重みを load する。
+#   ただしイベント単位は state_dim=27、月次は state_dim=23 で互換性なし →
+#   通常は INIT_FROM_BASE を使わない (cold start) で十分。
+#   どうしても warm-start したいなら同じイベント単位で学習済の checkpoint を指定する。
+INIT_FROM_BASE="${INIT_FROM_BASE:-}"
+INIT_LR_SCALE="${INIT_LR_SCALE:-0.1}"
+
 # 評価1パターンを実行する関数
 run_eval() {
     local model_path="$1"
@@ -152,6 +161,17 @@ for i in 0 1 2 3; do
     if [ -f "$model_dir/mce_event_irl_model.pt" ]; then
         echo "[MCE-IRL event $VNAME train_${win}m] 学習スキップ（学習済み）"
     else
+        # warm-start: state_dim=27 の互換 checkpoint がある場合のみ適用
+        warm_args=()
+        if [ -n "$INIT_FROM_BASE" ]; then
+            init_ckpt="$INIT_FROM_BASE/train_${win}m/mce_event_irl_model.pt"
+            if [ -f "$init_ckpt" ]; then
+                warm_args=(--init-from "$init_ckpt" --init-lr-scale "$INIT_LR_SCALE")
+                echo "[MCE-IRL event $VNAME train_${win}m] warm-start from $init_ckpt (LR×$INIT_LR_SCALE)"
+            else
+                echo "[MCE-IRL event $VNAME train_${win}m] WARN: warm-start checkpoint 不在 ($init_ckpt) → cold start"
+            fi
+        fi
         echo "[MCE-IRL event $VNAME train_${win}m] 学習開始 (future_window=${fs}-${fe}m, GPU=$GPU_ID)..."
         uv run python scripts/train/train_mce_event_irl.py \
             --directory-level \
@@ -165,7 +185,8 @@ for i in 0 1 2 3; do
             --future-window-start "$fs" \
             --future-window-end "$fe" \
             --trajectories-cache "$CACHE_DIR/mce_event_traj_${win}.pkl" \
-            --output "$model_dir"
+            --output "$model_dir" \
+            "${warm_args[@]}"
         echo "[MCE-IRL event $VNAME train_${win}m] 学習完了"
     fi
 done

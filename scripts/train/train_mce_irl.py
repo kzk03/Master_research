@@ -1153,6 +1153,23 @@ def main():
         help="既存モデルのパス（評価のみの場合）"
     )
     parser.add_argument(
+        "--init-from",
+        type=str,
+        default=None,
+        help=(
+            "warm-start: 既存 checkpoint (例: Focal-supervised の irl_model.pt) から"
+            " 重みを初期化して MCE-IRL NLL で fine-tune する。state_dim が一致する場合のみ"
+            " load_state_dict を実行 (不一致時は ValueError)。"
+        ),
+    )
+    parser.add_argument(
+        "--init-lr-scale",
+        type=float,
+        default=1.0,
+        help="warm-start 時に学習率を scale する倍率 (デフォルト 1.0、推奨 0.1)。"
+             " --init-from 指定時のみ使用。",
+    )
+    parser.add_argument(
         "--directory-level",
         action="store_true",
         help="ディレクトリ単位で学習する（ラベル・特徴量をディレクトリ対応に変更）"
@@ -1310,17 +1327,72 @@ def main():
             logger.error("訓練用軌跡が抽出できませんでした")
             return
 
+        # warm-start を使う場合は LR を scale する
+        base_lr = 3e-4
+        effective_lr = base_lr * (args.init_lr_scale if args.init_from else 1.0)
         config = {
             'state_dim': state_dim,
             'action_dim': 5,
             'hidden_dim': 128,
             'sequence': True,
             'seq_len': 0,
-            'learning_rate': 3e-4,
+            'learning_rate': effective_lr,
             'dropout': 0.2,
             'model_type': args.model_type,
         }
         irl_system = MCEIRLSystem(config)
+
+        # warm-start: 既存 checkpoint から重みを load
+        if args.init_from:
+            init_path = Path(args.init_from)
+            if not init_path.exists():
+                raise FileNotFoundError(f"--init-from が指定する checkpoint が見つかりません: {init_path}")
+            logger.info(f"warm-start: {init_path} から重みを load")
+            init_sd = torch.load(init_path, map_location='cpu', weights_only=True)
+            init_state_w = init_sd.get('state_encoder.0.weight')
+            if init_state_w is not None and init_state_w.shape[1] != state_dim:
+                raise ValueError(
+                    f"warm-start checkpoint の state_dim={init_state_w.shape[1]} は"
+                    f" 学習側 state_dim={state_dim} と一致しません。"
+                    f" 互換性のある checkpoint (同じ --directory-level 設定で学習されたもの)"
+                    f" を指定してください。"
+                )
+            # 旧実装 (self.lstm/self.lstm_norm 直接保持) で保存された Focal baseline checkpoint を
+            # 現実装 (self.backbone = LSTMBackbone(...)) のキー名に正規化してから転移する。
+            renamed_sd = {}
+            for k, v in init_sd.items():
+                if k.startswith('lstm.'):
+                    renamed_sd['backbone.' + k] = v
+                elif k == 'lstm_norm.weight':
+                    renamed_sd['backbone.norm.weight'] = v
+                elif k == 'lstm_norm.bias':
+                    renamed_sd['backbone.norm.bias'] = v
+                else:
+                    renamed_sd[k] = v
+            # shape 一致するパラメータだけ抽出 (Focal 出力 [1,64] vs MCE 出力 [2,64] のような
+            # ヘッド差異を許容し、本体 (state_encoder / LSTM / attention) のみ転移する)
+            cur_sd = irl_system.network.state_dict()
+            compat_sd = {}
+            skipped: list[tuple[str, tuple, tuple]] = []
+            for k, v in renamed_sd.items():
+                if k in cur_sd and cur_sd[k].shape == v.shape:
+                    compat_sd[k] = v
+                else:
+                    skipped.append((k, tuple(v.shape), tuple(cur_sd[k].shape) if k in cur_sd else ()))
+            missing, unexpected = irl_system.network.load_state_dict(compat_sd, strict=False)
+            logger.info(
+                f"warm-start: 互換 {len(compat_sd)}/{len(renamed_sd)} 個のパラメータを load"
+            )
+            if skipped:
+                for k, src, dst in skipped[:5]:
+                    logger.info(f"  skip {k}: ckpt{src} ↔ model{dst}")
+                if len(skipped) > 5:
+                    logger.info(f"  ... 他 {len(skipped) - 5} 個")
+            if missing:
+                logger.info(f"  missing (random init): {len(missing)} 個")
+            logger.info(
+                f"warm-start 完了: LR scale={args.init_lr_scale} → 実効 LR={effective_lr:.2e}"
+            )
 
         # 訓練データの正例率（参考情報のみ。MCE-IRL では Focal Loss は使わない）
         positive_count = sum(1 for t in train_trajectories if t['future_acceptance'])
@@ -1409,6 +1481,9 @@ def main():
             'dropout': 0.2,
             'num_actions': 2,
             'loss': 'softmax_cross_entropy_trajectory_nll',
+            'warm_start_from': str(args.init_from) if args.init_from else None,
+            'init_lr_scale': args.init_lr_scale if args.init_from else None,
+            'effective_lr': effective_lr,
         }
         metadata_path = output_dir / "model_metadata.json"
         with open(metadata_path, 'w') as f:
