@@ -1,0 +1,18 @@
+{
+  "model_class": "mce_event_irl_multiclass",
+  "model_type": 0,
+  "state_dim": 27,
+  "action_dim": 5,
+  "hidden_dim": 128,
+  "dropout": 0.2,
+  "num_actions": 17,
+  "multi_class_action": true,
+  "dir_class_mapping_path": "outputs/dir_class_mapping_K15.json",
+  "loss": "softmax_cross_entropy_trajectory_nll",
+  "step_unit": "event",
+  "per_dev": true,
+  "trajectories_cache": "outputs/mce_pilot_engagement/cache/engagement_traj_0-3.pkl",
+  "epochs_trained": 10,
+  "best_epoch": 4,
+  "best_val_loss": 2.275429391860962
+}
