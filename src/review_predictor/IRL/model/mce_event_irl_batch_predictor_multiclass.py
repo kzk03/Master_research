@@ -285,6 +285,60 @@ class MCEEventMulticlassBatchPredictor(MCEEventBatchContinuationPredictor):
         )
         return float(result.get("continuation_probability", 0.5))
 
+    def predict_developer_directory_with_beta(
+        self,
+        email: str,
+        directory: str,
+        prediction_time: datetime,
+        path_extractor=None,
+        head_index: int = 0,
+    ) -> float:
+        """β 戦略付き (dev, dir) 予測。
+
+        per_dev=True 専用。`_build_dev_event_sequence` に target_dir を渡すことで
+        最終 step の path_features (3 次元) が target_dir 由来の値で上書きされる
+        (= 親クラス binary predictor の β 戦略がそのまま発動)。これにより state
+        の最終ベクトルに target_dir 信号が直接乗り、softmax がその方向に偏る。
+
+        K=52 (depth=2) のように softmax が薄まる multiclass モデルでも、
+        path_features 経由で target_dir を state に注入することで (dev, dir)
+        ペア間の確率差を作れることを期待。
+        """
+        self._load_model()
+        if not self.per_dev:
+            raise ValueError(
+                "predict_developer_directory_with_beta は per_dev=True 専用です。"
+            )
+
+        seq = self._build_dev_event_sequence(
+            email, directory, prediction_time, path_extractor
+        )
+        (
+            event_histories,
+            step_context_dates,
+            step_total_proj,
+            path_feats,
+            event_feats,
+            developer_info,
+        ) = seq
+
+        if developer_info is None or not event_histories:
+            return 1.0 / max(self._num_actions, 2)
+
+        target_cid = self._dir_to_class_id(directory)
+        result = self._irl_system.predict_continuation_probability_monthly(
+            developer=developer_info,
+            monthly_activity_histories=event_histories,
+            step_context_dates=step_context_dates,
+            context_date=prediction_time,
+            step_total_project_reviews=step_total_proj,
+            step_path_features=path_feats,
+            step_event_features=event_feats,
+            head_index=head_index,
+            target_class_id=target_cid,
+        )
+        return float(result.get("continuation_probability", 0.5))
+
     def predict_developer_directory_distribution(
         self,
         email: str,
