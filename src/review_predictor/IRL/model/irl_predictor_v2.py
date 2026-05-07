@@ -146,6 +146,7 @@ class RetentionIRLNetwork(nn.Module):
             nn.Sigmoid(),
         )
     
+    # 順伝播
     def forward(self, state: torch.Tensor, action: torch.Tensor, lengths: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         ニューラルネットワークの前向き計算 (時系列対応・可変長対応)
@@ -161,8 +162,7 @@ class RetentionIRLNetwork(nn.Module):
         """
         batch_size, seq_len, _ = state.shape
 
-        # ステップ1: 状態と行動をエンコード
-        # 各タイムステップの状態・行動を独立にエンコード
+        # ステップ1: 状態と行動をエンコード（-1は自動でベクトルをの次元を調整する）
         # view(-1, dim)で2次元に変換 → エンコード → view(batch, seq, dim)で3次元に戻す
         state_encoded = self.state_encoder(state.view(-1, state.shape[-1])).view(batch_size, seq_len, -1)
         action_encoded = self.action_encoder(action.view(-1, action.shape[-1])).view(batch_size, seq_len, -1)
@@ -176,29 +176,29 @@ class RetentionIRLNetwork(nn.Module):
         # PyTorchのLSTMは降順にソートされたシーケンスを要求
         # ========================================
         lengths_cpu = lengths.cpu()
-        sorted_lengths, sorted_idx = lengths_cpu.sort(descending=True)
+        sorted_lengths, sorted_idx = lengths_cpu.sort(descending=True) # 降順にソートしたやつ，元のリストの何番目か
         _, unsort_idx = sorted_idx.sort()  # 元の順序に戻すためのインデックス
 
-        # ソート後のシーケンスをpack
+        # ソート後のシーケンスをpack（不要な０を削除：もっとも活動期間長いやつに合わせて０paddingしてるものを削除）
         combined_sorted = combined[sorted_idx]
         packed = nn.utils.rnn.pack_padded_sequence(
             combined_sorted, sorted_lengths, batch_first=True, enforce_sorted=True
         )
 
         # LSTMで処理
-        lstm_out_packed, _ = self.lstm(packed)
+        lstm_out_packed, _ = self.lstm(packed) #_はLSTMの隠れ状態（今回は使用しない）
 
-        # unpack して元の順序に戻す
+        # unpack して元の順序に戻す（0パディングに戻す）
         lstm_out_sorted, _ = nn.utils.rnn.pad_packed_sequence(
             lstm_out_packed, batch_first=True
         )
         lstm_out = lstm_out_sorted[unsort_idx]
 
         # 各シーケンスの実際の最終ステップを取得
-        hidden = torch.zeros(batch_size, lstm_out.size(-1), device=state.device)
+        hidden = torch.zeros(batch_size, lstm_out.size(-1), device=state.device) # 空のテンソルを用意
         for i in range(batch_size):
             actual_len = lengths[i].item()
-            hidden[i] = lstm_out[i, actual_len - 1, :]
+            hidden[i] = lstm_out[i, actual_len - 1, :]  #lstm_out[ ①誰の?,  ②いつの?,  ③どのデータを? ]:は全特徴量の次元を引っ張ってくる
 
         hidden = self.lstm_norm(hidden)  # LayerNorm で安定化
 
@@ -207,6 +207,7 @@ class RetentionIRLNetwork(nn.Module):
 
         return reward, continuation_prob
     
+
     def forward_all_steps(self, state: torch.Tensor, action: torch.Tensor,
                           lengths: torch.Tensor,
                           return_reward: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -264,11 +265,6 @@ class RetentionIRLSystem:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
 
-        # ========================================
-        # ネットワーク設定（マルチプロジェクト対応）
-        # - 状態次元: 10 → 14次元（プロジェクト特徴量4つ追加）
-        # - 行動次元: 4 → 5次元（プロジェクト特徴量1つ追加）
-        # ========================================
         self.state_dim = config.get('state_dim', len(STATE_FEATURES))  # 動的に取得
         self.action_dim = config.get('action_dim', len(ACTION_FEATURES))  # 動的に取得
         self.hidden_dim = config.get('hidden_dim', 128)
@@ -280,7 +276,7 @@ class RetentionIRLSystem:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # ネットワーク初期化
-        self.model_type = config.get('model_type', 0)
+        self.model_type = config.get('model_type', 0) #attentionやTransformerなどのバリエーションを指定するためのパラメータ
         if self.model_type == 0:
             self.network = RetentionIRLNetwork(
                 self.state_dim, self.action_dim, self.hidden_dim, self.dropout
@@ -360,11 +356,6 @@ class RetentionIRLSystem:
         """
         Focal Loss の計算（クラス不均衡対策）
 
-        Focal Lossは、クラス不均衡問題に対処するための損失関数です。
-        - 簡単な例（正しく予測できている例）の損失を減らす
-        - 難しい例（間違って予測している例）の損失を増やす
-        - 少数クラス（正例）により多くの重みを与える
-
         数式: FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t) * sample_weight
 
         パラメータ:
@@ -373,8 +364,7 @@ class RetentionIRLSystem:
         - gamma: フォーカスパラメータ（0～5、大きいほど難しい例重視）
           例: gamma=1.0の場合、p_t=0.9の例は重みが0.1^1.0=0.1に減少
         - sample_weight: サンプルごとの重み
-          例: 依頼なし=0.5、依頼あり=1.0
-
+            例: 依頼なし（拡張期間のみ依頼あり）=0.1、依頼あり=1.0
         Args:
             predictions: 予測確率 [batch_size] or [batch_size, 1]
                          値の範囲: 0～1（Sigmoidの出力）
@@ -1255,7 +1245,7 @@ class RetentionIRLSystem:
         # ── train / val 分割 ──
         import random
         import copy
-        indices = list(range(len(expert_trajectories)))
+        indices = list(range(len(expert_trajectories))) # インデックスのリストを作成（人数分）
         random.seed(42)
         random.shuffle(indices)
         val_size = max(1, int(len(indices) * val_ratio))
@@ -1526,7 +1516,7 @@ class RetentionIRLSystem:
         best_state_dict = None
         patience_counter = 0
 
-        # validation バッチは固定（毎エポック同じ順序）
+        # validation（小テスト用問題集） バッチは固定（毎エポック同じ順序）
         val_batches = _collate_batches(val_data, batch_size, shuffle=False, rng=rng)
 
         for epoch in range(epochs):
@@ -1546,25 +1536,37 @@ class RetentionIRLSystem:
                     mask = batch['mask']
                     reward_targets = targets * 2.0 - 1.0
 
+                    # ── 誤差（Loss）の計算 ──
                     if self.model_type != 0 and is_multitask(self.model_type):
+                        # 【マルチタスク版】複数の未来（3ヶ月後、6ヶ月後など）を同時に予測する場合
                         head_labels = batch['head_labels'] or {}
                         continuation_loss = torch.tensor(0.0, device=self.device)
                         n_active_heads = 0
+                        
+                        # 各予測期間（head）ごとに答え合わせをして誤差を合算
                         for head_idx, head_pred in predicted_continuation.items():
                             if head_idx in head_labels:
                                 continuation_loss = continuation_loss + _masked_focal_loss(
                                     head_pred, head_labels[head_idx], sample_weights, mask
                                 )
                                 n_active_heads += 1
+                                
+                        # 合算した誤差を、予測した期間の数で割って平均をとる
                         if n_active_heads > 0:
                             continuation_loss = continuation_loss / n_active_heads
+                            
+                        # 報酬（Reward）の予測誤差（MSE）を計算
                         reward_loss = _masked_mse(predicted_reward, reward_targets, mask)
                     else:
+                        # 【シングルタスク版】シンプルに1つの未来だけを予測する場合（ベースライン等）
+                        # 継続確率の予測誤差（Focal Loss）を計算
                         continuation_loss = _masked_focal_loss(
                             predicted_continuation, targets, sample_weights, mask
                         )
+                        # 報酬（Reward）の予測誤差（MSE）を計算
                         reward_loss = _masked_mse(predicted_reward, reward_targets, mask)
 
+                    # 継続予測の誤差と報酬予測の誤差を足して、このバッチの最終的な誤差とする
                     loss_per_batch = continuation_loss + reward_loss
 
                     self.optimizer.zero_grad()

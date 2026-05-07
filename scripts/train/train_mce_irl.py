@@ -1194,6 +1194,13 @@ def main():
         default=None,
         help="軌跡キャッシュファイルのパス（.pkl）。存在すればロード、なければ抽出後に保存"
     )
+    parser.add_argument(
+        "--skip-threshold",
+        action="store_true",
+        help="訓練データ上の F1 最適閾値計算をスキップ。"
+             " 閾値は 46928 軌跡の逐次推論で 1 時間以上かかるため、AUC/Spearman ベース"
+             " 評価しか使わない場合は不要。"
+    )
     args = parser.parse_args()
     
     # 出力ディレクトリを作成
@@ -1409,12 +1416,40 @@ def main():
             epochs=args.epochs,
             patience=args.patience,
         )
-        
+
+        # 学習完了後、まず重みとメタデータを保存する。閾値計算は重く、
+        # 途中で kill されてもここまでで Phase 3 が走れるようにするため。
+        model_path = output_dir / "mce_irl_model.pt"
+        torch.save(irl_system.network.state_dict(), model_path)
+        logger.info(f"モデルを保存 (閾値計算前): {model_path}")
+
+        metadata = {
+            'model_class': 'mce_irl',
+            'model_type': args.model_type,
+            'state_dim': state_dim,
+            'action_dim': 5,
+            'hidden_dim': 128,
+            'dropout': 0.2,
+            'num_actions': 2,
+            'loss': 'softmax_cross_entropy_trajectory_nll',
+            'warm_start_from': str(args.init_from) if args.init_from else None,
+            'init_lr_scale': args.init_lr_scale if args.init_from else None,
+            'effective_lr': effective_lr,
+        }
+        metadata_path = output_dir / "model_metadata.json"
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        logger.info(f"メタデータを保存: {metadata_path}")
+
+        if args.skip_threshold:
+            logger.info("--skip-threshold 指定のため、訓練データ上の閾値計算をスキップします。")
+            return
+
         # 訓練データ上で最適閾値を決定
         logger.info("訓練データ上で最適閾値を決定...")
         train_y_true = []
         train_y_pred = []
-        
+
         for traj in train_trajectories:
             developer = traj.get('developer', traj.get('developer_info', {}))
             email = developer.get('email', developer.get('developer_id', ''))
@@ -1465,32 +1500,8 @@ def main():
             'median': float(np.median(train_y_pred))
         }
         logger.info(f"訓練データ予測確率: [{train_optimal_threshold_info['train_prediction_stats']['min']:.4f}, {train_optimal_threshold_info['train_prediction_stats']['max']:.4f}]")
-        
-        # モデルを保存
-        model_path = output_dir / "mce_irl_model.pt"
-        torch.save(irl_system.network.state_dict(), model_path)
-        logger.info(f"モデルを保存: {model_path}")
 
-        # モデルメタデータを保存
-        metadata = {
-            'model_class': 'mce_irl',
-            'model_type': args.model_type,
-            'state_dim': state_dim,
-            'action_dim': 5,
-            'hidden_dim': 128,
-            'dropout': 0.2,
-            'num_actions': 2,
-            'loss': 'softmax_cross_entropy_trajectory_nll',
-            'warm_start_from': str(args.init_from) if args.init_from else None,
-            'init_lr_scale': args.init_lr_scale if args.init_from else None,
-            'effective_lr': effective_lr,
-        }
-        metadata_path = output_dir / "model_metadata.json"
-        with open(metadata_path, 'w') as f:
-            json.dump(metadata, f, indent=2)
-        logger.info(f"メタデータを保存: {metadata_path}")
-
-        # 閾値を保存
+        # 閾値を保存 (モデル本体とメタデータは閾値計算前に保存済み)
         threshold_path = output_dir / "optimal_threshold.json"
         with open(threshold_path, 'w') as f:
             json.dump(train_optimal_threshold_info, f, indent=2)
