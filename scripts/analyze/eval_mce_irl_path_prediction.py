@@ -22,9 +22,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import warnings
 warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
+# loky で生まれる子プロセスは親の filterwarnings を継承しないので、
+# PYTHONWARNINGS 経由で同じ警告を抑制する (子プロセス起動時に解釈される)。
+os.environ.setdefault(
+    "PYTHONWARNINGS",
+    "ignore:.*sklearn.utils.parallel.delayed.*:UserWarning",
+)
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -769,18 +776,39 @@ def evaluate_single_timepoint(
             df=df,
             history_start=dir_history_start,
         )
-        # (dev, dir) ペアをフラット化して一括推論
+        # (dev, dir) ペアを dev でグループ化して一括推論
+        # 月次データ構築 (_build_monthly_data) は dir に依存しないため、
+        # 同じ dev で複数 dir を推論する場合は 1 回にまとめると ~9倍速い。
         head_index = future_start_months // 3
         pairs = [(d, dev) for d, devs in dir_developers.items() for dev in devs]
-        logger.info(f"IRL_Dir: {len(pairs)} ペアを推論...")
-
-        pair_results = []
+        dev_to_dirs: Dict[str, List[str]] = {}
         for d, dev in pairs:
-            prob = dir_predictor.predict_developer_directory(
-                dev, d, prediction_time, path_extractor=path_extractor,
+            dev_to_dirs.setdefault(dev, []).append(d)
+        logger.info(
+            f"IRL_Dir: {len(pairs)} ペアを推論... ({len(dev_to_dirs)} 開発者 × 平均 "
+            f"{len(pairs) / max(len(dev_to_dirs), 1):.1f} dir)"
+        )
+
+        def _predict_for_dev(dev: str, dirs: List[str]):
+            dir_probs = dir_predictor.predict_developer_directories(
+                dev, dirs, prediction_time,
+                path_extractor=path_extractor,
                 head_index=head_index,
             )
-            pair_results.append((d, dev, prob))
+            return [(d, dev, dir_probs[d]) for d in dirs]
+
+        # PyTorch forward は GIL を解放するので backend="threading" が安全に効く。
+        # n_jobs=1 のときは Parallel オーバーヘッドを避けて直接ループ。
+        if n_jobs == 1:
+            pair_results = []
+            for dev, dirs in dev_to_dirs.items():
+                pair_results.extend(_predict_for_dev(dev, dirs))
+        else:
+            grouped = Parallel(n_jobs=n_jobs, backend="threading")(
+                delayed(_predict_for_dev)(dev, dirs)
+                for dev, dirs in dev_to_dirs.items()
+            )
+            pair_results = [item for group in grouped for item in group]
 
         irl_dir_agg: Dict[str, float] = {}
         for d, dev, prob in pair_results:
