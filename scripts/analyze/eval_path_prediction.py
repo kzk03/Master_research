@@ -728,9 +728,10 @@ def evaluate_single_timepoint(
         "Naive": naive_pred,
         "Linear": linear_pred,
         "RF": rf_pred,
-        "IRL_VariantA": variant_a,
-        "IRL_VariantA_scaled": variant_a_scaled,
-        "IRL_VariantB": variant_b,
+        # NOTE: グローバルIRLモデル未配線のため一旦除外
+        # "IRL_VariantA": variant_a,
+        # "IRL_VariantA_scaled": variant_a_scaled,
+        # "IRL_VariantB": variant_b,
     }
 
     for name, pred in methods.items():
@@ -746,7 +747,8 @@ def evaluate_single_timepoint(
 
     # 6.5 ディレクトリ×個人の二値分類評価（卒論と同じ指標）
     clf_methods = {
-        "IRL_VariantA": continuation_probs,
+        # NOTE: グローバルIRLモデル未配線のため一旦除外
+        # "IRL_VariantA": continuation_probs,
         "RF": rf_probs,
     }
 
