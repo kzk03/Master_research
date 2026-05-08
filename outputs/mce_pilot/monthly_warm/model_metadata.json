@@ -1,0 +1,13 @@
+{
+  "model_class": "mce_irl",
+  "model_type": 0,
+  "state_dim": 23,
+  "action_dim": 5,
+  "hidden_dim": 128,
+  "dropout": 0.2,
+  "num_actions": 2,
+  "loss": "softmax_cross_entropy_trajectory_nll",
+  "warm_start_from": "outputs/variant_comparison_server/lstm_baseline/train_0-3m/irl_model.pt",
+  "init_lr_scale": 0.1,
+  "effective_lr": 2.9999999999999997e-05
+}

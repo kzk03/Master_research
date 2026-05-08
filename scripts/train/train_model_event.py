@@ -735,6 +735,224 @@ def _process_one_reviewer_event(
     return results, positive_count, negative_count, skipped_count
 
 
+def _process_one_reviewer_event_dev_only(
+    reviewer,
+    df,
+    history_df,
+    path_extractor,
+    train_start,
+    train_end,
+    future_window_start_months,
+    future_window_end_months,
+    reviewer_col,
+    date_col,
+    label_col,
+    dirs_column,
+    sliding_window_days=180,
+    max_events=256,
+):
+    """1レビュアー分のイベント単位軌跡（per-dev 版・全 dir 横断）を抽出する。
+
+    既存 `_process_one_reviewer_event` との違い:
+    - directory ループを廃止（reviewer 1 人 = 軌跡 1 件）
+    - dir_events は reviewer_history 全体を時系列ソート（全 dir 横断）
+    - 各 step の path_features / step_label はその event 自身の dirs で計算
+    - 軌跡には `step_event_dirs` フィールド（各 step の event の dir リスト）を追加
+    - 最終 future_acceptance / sample_weight は reviewer 全体の将来活動で判定
+    """
+    history_start = train_start
+    history_end = train_end
+
+    reviewer_history = history_df[history_df[reviewer_col] == reviewer]
+    sliding_delta = pd.Timedelta(days=sliding_window_days)
+
+    # ── 全 event を時系列ソート（dirs が空の row はスキップ）──
+    def _row_dirs(ds):
+        if not ds:
+            return []
+        return [d for d in ds if d != '.']
+
+    reviewer_history_sorted = reviewer_history.sort_values(date_col)
+    dir_events = reviewer_history_sorted[
+        reviewer_history_sorted[dirs_column].map(lambda ds: len(_row_dirs(ds)) > 0)
+    ]
+
+    if len(dir_events) == 0:
+        return [], 0, 0, 1
+
+    # 直近 max_events 件に truncate
+    if len(dir_events) > max_events:
+        dir_events = dir_events.tail(max_events)
+
+    # ── 軌跡全体の future_acceptance（reviewer 単位）──
+    label_start = train_end + pd.DateOffset(months=future_window_start_months)
+    label_end = train_end + pd.DateOffset(months=future_window_end_months)
+    label_df = df[
+        (df[date_col] >= label_start) &
+        (df[date_col] < label_end) &
+        (df[reviewer_col] == reviewer)
+    ]
+    if len(label_df) == 0:
+        future_acceptance = False
+        sample_weight = 0.5
+    else:
+        future_acceptance = len(label_df[label_df[label_col] == 1]) > 0
+        sample_weight = 1.0
+
+    positive_count = 1 if future_acceptance else 0
+    negative_count = 0 if future_acceptance else 1
+    skipped_count = 0
+
+    step_labels = []
+    event_activity_histories = []
+    step_context_dates = []
+    step_total_project_reviews = []
+    path_features_per_step = []
+    event_features_list = []
+    step_event_dirs = []
+
+    prev_event_time = None
+    for _, event_row in dir_events.iterrows():
+        event_time = event_row[date_col]
+        ev_dirs = _row_dirs(event_row[dirs_column])
+        if not ev_dirs:
+            continue
+        ev_dirs_frozen = frozenset(ev_dirs)
+
+        # ステップラベル: このイベント時点からの将来窓で、event の dirs に対する承諾有無
+        future_start = event_time + pd.DateOffset(months=future_window_start_months)
+        future_end = event_time + pd.DateOffset(months=future_window_end_months)
+        if future_end > train_end:
+            future_end = train_end
+        if future_start >= train_end:
+            continue
+
+        event_future_df = df[
+            (df[date_col] >= future_start) &
+            (df[date_col] < future_end) &
+            (df[reviewer_col] == reviewer) &
+            (df[dirs_column].map(
+                lambda ds: bool(ev_dirs_frozen.intersection(_row_dirs(ds)))
+                if ds else False
+            ))
+        ]
+        if len(event_future_df) == 0:
+            step_label = 0
+        else:
+            step_label = 1 if len(event_future_df[event_future_df[label_col] == 1]) > 0 else 0
+        step_labels.append(step_label)
+        step_context_dates.append(event_time)
+        step_event_dirs.append(ev_dirs)
+
+        # 特徴量計算用のスライディングウィンドウ履歴
+        window_start = event_time - sliding_delta
+        window_history = reviewer_history[
+            (reviewer_history[date_col] >= window_start) &
+            (reviewer_history[date_col] < event_time)
+        ]
+        activities = []
+        for _, row in window_history.iterrows():
+            activities.append({
+                'timestamp': row[date_col],
+                'action_type': 'review',
+                'project': row.get('project', 'unknown'),
+                'project_id': row.get('project', 'unknown'),
+                'request_time': row.get('request_time', row[date_col]),
+                'response_time': row.get('first_response_time'),
+                'accepted': row.get(label_col, 0) == 1,
+                'owner_email': row.get('owner_email', ''),
+                'is_cross_project': row.get('is_cross_project', False),
+                'files_changed': row.get('change_files_count', 0),
+                'lines_added': row.get('change_insertions', 0),
+                'lines_deleted': row.get('change_deletions', 0),
+            })
+        authored_window = df[
+            (df['owner_email'] == reviewer) &
+            (df[date_col] >= window_start) &
+            (df[date_col] < event_time)
+        ]
+        for _, row in authored_window.iterrows():
+            activities.append({
+                'action_type': 'authored',
+                'timestamp': row[date_col],
+                'owner_email': reviewer,
+                'reviewer_email': row.get('email', row.get('reviewer_email', '')),
+                'files_changed': row.get('change_files_count', 0),
+                'lines_added': row.get('change_insertions', 0),
+                'lines_deleted': row.get('change_deletions', 0),
+            })
+        event_activity_histories.append(activities)
+
+        total_proj = len(df[
+            (df[date_col] >= history_start) & (df[date_col] < event_time)
+        ])
+        step_total_project_reviews.append(total_proj)
+
+        # パス特徴量: この event の dirs で計算
+        pf = path_extractor.compute(
+            reviewer, ev_dirs_frozen, event_time.to_pydatetime()
+        )
+        path_features_per_step.append(pf)
+
+        # イベント固有特徴量
+        ins = event_row.get('change_insertions', 0)
+        dels = event_row.get('change_deletions', 0)
+        lines_changed = (ins if pd.notna(ins) else 0) + (dels if pd.notna(dels) else 0)
+        rt_raw = event_row.get('response_latency_days', 0.0)
+        response_time = float(rt_raw) if pd.notna(rt_raw) else 0.0
+        accepted = 1 if event_row.get(label_col, 0) == 1 else 0
+        time_since_prev = (
+            (event_time - prev_event_time).total_seconds() / 86400.0
+            if prev_event_time is not None else 30.0
+        )
+        event_features_list.append({
+            'event_lines_changed': max(0.0, min(lines_changed / 2000.0, 1.0)),
+            'event_response_time': max(0.0, min(response_time / 14.0, 1.0)),
+            'event_accepted': float(accepted),
+            'time_since_prev_event': max(0.0, min(time_since_prev / 180.0, 1.0)),
+        })
+        prev_event_time = event_time
+
+    if not step_labels:
+        return [], 0, 0, 1
+
+    developer_info = {
+        'developer_id': reviewer,
+        'email': reviewer,
+        'first_seen': reviewer_history[date_col].min(),
+        'changes_reviewed': len(reviewer_history[reviewer_history[label_col] == 1]),
+        'requests_received': len(reviewer_history),
+        'acceptance_rate': (
+            len(reviewer_history[reviewer_history[label_col] == 1]) / len(reviewer_history)
+            if len(reviewer_history) > 0 else 0.0
+        ),
+        'projects': (
+            reviewer_history['project'].unique().tolist()
+            if 'project' in reviewer_history.columns else []
+        ),
+    }
+
+    trajectory = {
+        'developer_info': developer_info,
+        'directory': None,  # per-dev では特定 dir に紐付かない
+        'activity_history': [],
+        'monthly_activity_histories': event_activity_histories,
+        'step_context_dates': step_context_dates,
+        'step_total_project_reviews': step_total_project_reviews,
+        'path_features_per_step': path_features_per_step,
+        'event_features': event_features_list,
+        'step_event_dirs': step_event_dirs,
+        'context_date': train_end,
+        'step_labels': step_labels,
+        'seq_len': len(step_labels),
+        'reviewer': reviewer,
+        'future_acceptance': future_acceptance,
+        'sample_weight': sample_weight,
+        'per_dev': True,
+    }
+    return [trajectory], positive_count, negative_count, skipped_count
+
+
 def extract_event_level_trajectories(
     df: pd.DataFrame,
     train_start: pd.Timestamp,
@@ -805,6 +1023,83 @@ def extract_event_level_trajectories(
         logger.info(f"  系列長: mean={np.mean(seq_lens):.1f}, "
                      f"median={np.median(seq_lens):.1f}, "
                      f"max={max(seq_lens)}")
+    logger.info("=" * 80)
+
+    return trajectories
+
+
+def extract_event_level_trajectories_dev_only(
+    df: pd.DataFrame,
+    train_start: pd.Timestamp,
+    train_end: pd.Timestamp,
+    path_extractor,
+    future_window_start_months: int = 0,
+    future_window_end_months: int = 3,
+    reviewer_col: str = 'reviewer_email',
+    date_col: str = 'request_time',
+    label_col: str = 'label',
+    dirs_column: str = 'dirs',
+    sliding_window_days: int = 180,
+    max_events: int = 256,
+    n_jobs: int = -1,
+) -> List[Dict[str, Any]]:
+    """
+    イベント単位の軌跡を抽出する（per-dev 版・全 dir 横断）。[並列化版]
+
+    1サンプル = 開発者 1 名（dir 横断）。
+    1ステップ = 1レビューイベント（その event の dirs に紐付く）。
+    """
+    from joblib import Parallel, delayed
+
+    logger.info("=" * 80)
+    logger.info("イベント単位の軌跡抽出 [per-dev / 全 dir 横断]")
+    logger.info(f"訓練期間: {train_start} ～ {train_end}")
+    logger.info(f"将来窓: {future_window_start_months}～{future_window_end_months}ヶ月")
+    logger.info(f"スライディングウィンドウ: {sliding_window_days}日")
+    logger.info(f"最大イベント数: {max_events}")
+    logger.info(f"並列数: n_jobs={n_jobs}")
+    logger.info("=" * 80)
+
+    history_df = df[
+        (df[date_col] >= train_start) & (df[date_col] < train_end)
+    ]
+    active_reviewers = history_df[reviewer_col].unique()
+    logger.info(f"特徴量計算期間内のレビュアー数: {len(active_reviewers)}")
+
+    batch_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=10)(
+        delayed(_process_one_reviewer_event_dev_only)(
+            reviewer, df, history_df, path_extractor,
+            train_start, train_end,
+            future_window_start_months, future_window_end_months,
+            reviewer_col, date_col, label_col, dirs_column,
+            sliding_window_days, max_events,
+        )
+        for reviewer in active_reviewers
+    )
+
+    trajectories = []
+    positive_count = 0
+    negative_count = 0
+    skipped_count = 0
+    for trajs, pos, neg, skip in batch_results:
+        trajectories.extend(trajs)
+        positive_count += pos
+        negative_count += neg
+        skipped_count += skip
+
+    logger.info("=" * 80)
+    logger.info(f"イベント単位軌跡抽出完了 [per-dev]: {len(trajectories)} dev")
+    logger.info(f"  正例: {positive_count}, 負例: {negative_count}")
+    logger.info(f"  スキップ: {skipped_count}")
+    if trajectories:
+        total_steps = sum(t['seq_len'] for t in trajectories)
+        seq_lens = [t['seq_len'] for t in trajectories]
+        logger.info(f"  総ステップ数: {total_steps}")
+        logger.info(f"  系列長: mean={np.mean(seq_lens):.1f}, "
+                     f"median={np.median(seq_lens):.1f}, "
+                     f"max={max(seq_lens)}")
+        short_ratio = sum(1 for s in seq_lens if s <= 5) / len(seq_lens)
+        logger.info(f"  短軌跡率 (seq_len ≤ 5): {short_ratio:.1%}")
     logger.info("=" * 80)
 
     return trajectories

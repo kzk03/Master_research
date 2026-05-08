@@ -1,9 +1,13 @@
 #!/bin/bash
 # ============================================================
-# イベント単位系列の実験スクリプト
+# イベント単位系列の実験スクリプト (state_dim = 27)
 # ============================================================
-# 月次集約版 (run_variant_single.sh) と並行してサーバで実行可能。
-# 既存パイプラインには影響しない。
+# 訓練: scripts/train/train_model_event.py        (state_dim=27)
+# 評価: scripts/analyze/eval_mce_event_irl_path_prediction.py (state_dim=27)
+#
+# 月次集約パイプライン (state_dim=23) は scripts/run_variant_single.sh
+# 側で完結している。本スクリプトはイベント単位専用で、月次評価器
+# (eval_path_prediction.py) は使用しない。
 #
 # 使い方:
 #   bash scripts/run_event_experiment.sh [gpu_id]
@@ -53,15 +57,20 @@ run_eval() {
     fi
 
     echo "[$vname train_${train_win}m -> eval_${eval_win}m] 評価開始..."
-    uv run python scripts/analyze/eval_path_prediction.py \
+    # イベント単位評価器 (state_dim=27 対応)。月次評価器 eval_path_prediction.py
+    # は state_dim=23 用なので使わない。--window-days は予測器内のスライディング
+    # ウィンドウ既定値 (180) と一致させて訓練側と整合させる。
+    uv run python scripts/analyze/eval_mce_event_irl_path_prediction.py \
         --data "$REVIEWS" \
         --raw-json "${RAW_JSON[@]}" \
         --prediction-time "$EVAL_CUTOFF" \
         --delta-months 3 \
         --future-start-months "$eval_fs" \
         --rf-future-start-months "$train_fs_val" \
+        --irl-model "$model_path" \
         --irl-dir-model "$model_path" \
         --rf-train-end "$TRAIN_END" \
+        --window-days "$SLIDING_WINDOW_DAYS" \
         --device cuda \
         --n-jobs -1 \
         --calibrate \
