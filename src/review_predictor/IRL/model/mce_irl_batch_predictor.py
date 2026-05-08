@@ -297,6 +297,60 @@ class MCEBatchContinuationPredictor:
 
         return float(result.get("continuation_probability", 0.5))
 
+    def predict_developer_directories(
+        self,
+        email: str,
+        directories: List[str],
+        prediction_time: datetime,
+        path_extractor=None,
+        head_index: int = 0,
+    ) -> Dict[str, float]:
+        """
+        1人の開発者について複数ディレクトリの continuation_prob を一括推論する。
+
+        predict_developer_directory を dir ごとに呼ぶと _build_monthly_data
+        (pandas iterrows × 月数) が directory に依存しないのに毎回再計算され
+        非効率なため、月次データは 1 回だけ構築して dir ごとに path_features
+        と forward だけループする。
+
+        Returns:
+            {directory: continuation_prob} の辞書。履歴がない場合は全 dir に 0.5。
+        """
+        self._load_model()
+
+        (
+            monthly_activity_histories,
+            step_context_dates,
+            step_total_project_reviews,
+            developer_info,
+        ) = self._build_monthly_data(email, prediction_time)
+
+        if developer_info is None or not monthly_activity_histories:
+            return {d: 0.5 for d in directories}
+
+        results: Dict[str, float] = {}
+        for directory in directories:
+            step_path_features = None
+            if path_extractor is not None:
+                step_path_features = []
+                task_dirs = frozenset({directory})
+                for ctx_date in step_context_dates:
+                    pf = path_extractor.compute(email, task_dirs, ctx_date)
+                    step_path_features.append(pf)
+
+            result = self._irl_system.predict_continuation_probability_monthly(
+                developer=developer_info,
+                monthly_activity_histories=monthly_activity_histories,
+                step_context_dates=step_context_dates,
+                context_date=prediction_time,
+                step_total_project_reviews=step_total_project_reviews,
+                step_path_features=step_path_features,
+                head_index=head_index,
+            )
+            results[directory] = float(result.get("continuation_probability", 0.5))
+
+        return results
+
     def predict_developer(
         self,
         email: str,
