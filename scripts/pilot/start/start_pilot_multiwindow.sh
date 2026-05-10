@@ -7,7 +7,7 @@
 # 前提: outputs/trajectory_cache/traj_{0-3,3-6,6-9,9-12}.pkl が存在すること
 #       (なければ scripts/extract_trajectories_cache.sh で先に生成)
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../../.."
 mkdir -p logs
 
 # 二重起動防止: 既存の PID ファイルがあり、そのプロセスがまだ生きていれば停止

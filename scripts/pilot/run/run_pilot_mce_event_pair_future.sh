@@ -19,7 +19,7 @@
 #   bash scripts/pilot/start/start_pilot_event_pair_future.sh
 
 set -e
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../../.."
 
 REVIEWS="data/combined_raw.csv"
 RAW_JSON=(

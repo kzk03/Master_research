@@ -18,7 +18,7 @@
 #   dir_class_mapping_K15.json は outputs/ 直下を共有
 
 set -e
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../../.."
 
 REVIEWS="data/combined_raw.csv"
 RAW_JSON=(

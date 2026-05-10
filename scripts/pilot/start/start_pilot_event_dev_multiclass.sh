@@ -3,7 +3,7 @@
 # バックグラウンド起動するヘルパ。
 # 使い方: bash scripts/pilot/start/start_pilot_event_dev_multiclass.sh
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../../.."
 mkdir -p logs
 nohup bash scripts/pilot/run/run_pilot_mce_event_dev_multiclass.sh \
     > logs/mce_pilot_event_dev_multiclass_full.log 2>&1 &

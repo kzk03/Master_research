@@ -18,7 +18,7 @@
 # 出力先: outputs/mce_pilot_event_dev_future_multiclass/
 
 set -e
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../../.."
 
 REVIEWS="data/combined_raw.csv"
 RAW_JSON=(

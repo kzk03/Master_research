@@ -3,7 +3,7 @@
 # バックグラウンド起動するヘルパ。
 # 使い方: bash scripts/pilot/start/start_pilot_event_pair_future.sh
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../../.."
 mkdir -p logs
 nohup bash scripts/pilot/run/run_pilot_mce_event_pair_future.sh \
     > logs/mce_pilot_event_pair_future_full.log 2>&1 &
