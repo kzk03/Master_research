@@ -1,25 +1,22 @@
 """
-パスごとの貢献者数予測評価スクリプト（Step 1）
+パスごとの貢献者数予測評価スクリプト (MCE-IRL イベント単位版)
 
-時点 T で各ディレクトリの Δ ヶ月後の貢献者数を予測し、
-実際の貢献者数と比較する。
-
-手法:
-  - Variant A（単純合計）: Σ continuation_prob_d
-  - Variant B（親和度加重）: Σ continuation_prob_d × affinity(d, D)
-
-ベースライン:
-  - Naive: T 時点の貢献者数がそのまま続くと仮定
-  - Linear: 過去の貢献者数推移から線形外挿
+eval_mce_irl_path_prediction.py をイベント単位 MCE-IRL モデル
+(mce_event_irl_model.pt, state_dim=27) 用に差し替えた版。
+BatchContinuationPredictor の代わりに MCEEventBatchContinuationPredictor を使い、
+イベント時系列の最終ステップでの π(a=1|s) を継続確率として用いる。
 
 使い方:
-    python scripts/analyze/eval/eval_path_prediction.py \
-        --data data/nova_raw.csv \
+    python scripts/analyze/eval/eval_mce_event_irl_path_prediction.py \
+        --data data/combined_raw.csv \
         --raw-json data/raw_json/openstack__nova.json \
-        --irl-model outputs/cross_temporal_v39/train_0-3m/irl_model.pt \
-        --prediction-time 2014-01-01 \
+        --irl-model outputs/mce_event_irl/train_0-3m/mce_event_irl_model.pt \
+        --irl-dir-model outputs/mce_event_irl/train_0-3m/mce_event_irl_model.pt \
+        --prediction-time 2022-01-01 \
         --delta-months 3 \
-        --window-days 180
+        --window-days 180 \
+        --device cuda \
+        --n-jobs -1
 """
 
 from __future__ import annotations
@@ -27,16 +24,18 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import warnings
+warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
-ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+from joblib import Parallel, delayed
+_SRC = str(Path(__file__).resolve().parents[2] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 from review_predictor.IRL.features.common_features import (
     FEATURE_NAMES,
@@ -59,7 +58,9 @@ from review_predictor.IRL.features.path_features import (
     load_change_dir_map,
     load_change_dir_map_multi,
 )
-from review_predictor.IRL.model.batch_predictor import BatchContinuationPredictor
+from review_predictor.IRL.model.mce_event_irl_batch_predictor import (
+    MCEEventBatchContinuationPredictor as BatchContinuationPredictor,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -240,6 +241,7 @@ def baseline_rf(
     target_dirs: Dict[str, Set[str]],
     future_start_months: int = 0,
     rf_train_end: Optional[datetime] = None,
+    n_jobs: int = -1,
 ) -> Tuple[Dict[str, float], Dict[str, float]]:
     """
     RF ベースライン: 卒論の RF で個人の continuation_prob を予測し、
@@ -258,18 +260,22 @@ def baseline_rf(
 
     feature_start = prediction_time - pd.Timedelta(days=window_days)
 
-    # 全開発者の continuation_prob を RF で推論
+    # 全開発者の continuation_prob を RF で推論（並列）
     all_devs = set()
     for devs in target_dirs.values():
         all_devs.update(devs)
 
-    rf_probs: Dict[str, float] = {}
-    for email in all_devs:
+    def _rf_predict_one(email):
         feat_dict = extract_common_features(
             df, email, feature_start, prediction_time, normalize=False,
         )
         X = np.array([[feat_dict[f] for f in FEATURE_NAMES]], dtype=np.float64)
-        rf_probs[email] = float(clf.predict_proba(X)[0, 1])
+        return email, float(clf.predict_proba(X)[0, 1])
+
+    results = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_rf_predict_one)(email) for email in all_devs
+    )
+    rf_probs: Dict[str, float] = dict(results)
 
     logger.info(
         f"RF: {len(rf_probs)} devs 推論完了, "
@@ -474,6 +480,90 @@ def compute_per_developer_classification(
     return metrics
 
 
+# ── 校正 ──────────────────────────────────────────────────────
+
+
+def calibrate_predictions(
+    pair_results: List[Tuple[str, str, float]],
+    actual_dir_devs: Dict[str, Set[str]],
+    calibration_fraction: float = 0.3,
+    random_seed: int = 777,
+) -> Tuple[List[Tuple[str, str, float]], pd.DataFrame]:
+    """
+    IsotonicRegression で IRL_Dir の (dev, dir) 確率を事後校正する。
+
+    Args:
+        pair_results: [(directory, developer, raw_prob), ...]
+        actual_dir_devs: {directory: {dev_who_actually_contributed, ...}}
+        calibration_fraction: フィット用に使うペアの割合
+        random_seed: 再現性用シード
+
+    Returns:
+        calibrated_pair_results: 校正済み確率に置き換えた pair_results
+        calibration_curve: 校正曲線データ (DataFrame)
+    """
+    from sklearn.isotonic import IsotonicRegression
+    from sklearn.model_selection import StratifiedShuffleSplit
+
+    # y_true / y_score を構築
+    y_true = np.array([
+        1 if dev in actual_dir_devs.get(d, set()) else 0
+        for d, dev, _ in pair_results
+    ])
+    y_score = np.array([prob for _, _, prob in pair_results])
+
+    n_pos = int(y_true.sum())
+    n_neg = len(y_true) - n_pos
+    if n_pos < 10 or n_neg < 10:
+        logger.warning(f"校正スキップ: 正例={n_pos}, 負例={n_neg} が少なすぎる")
+        return pair_results, pd.DataFrame()
+
+    # Stratified split: calibration_fraction をフィット用に使う
+    sss = StratifiedShuffleSplit(
+        n_splits=1,
+        train_size=calibration_fraction,
+        random_state=random_seed,
+    )
+    cal_idx, _ = next(sss.split(y_score, y_true))
+
+    # Isotonic regression をフィット
+    iso = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
+    iso.fit(y_score[cal_idx], y_true[cal_idx])
+
+    # 全ペアを変換
+    calibrated_scores = iso.transform(y_score)
+
+    calibrated_pair_results = [
+        (d, dev, float(calibrated_scores[i]))
+        for i, (d, dev, _) in enumerate(pair_results)
+    ]
+
+    # 校正曲線データ（reliability diagram 用）
+    n_bins = 10
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    curve_rows = []
+    for b in range(n_bins):
+        lo, hi = bin_edges[b], bin_edges[b + 1]
+        mask_raw = (y_score >= lo) & (y_score < hi)
+        mask_cal = (calibrated_scores >= lo) & (calibrated_scores < hi)
+        curve_rows.append({
+            "bin_center": (lo + hi) / 2,
+            "fraction_positive_raw": float(y_true[mask_raw].mean()) if mask_raw.sum() > 0 else np.nan,
+            "mean_predicted_raw": float(y_score[mask_raw].mean()) if mask_raw.sum() > 0 else np.nan,
+            "count_raw": int(mask_raw.sum()),
+            "fraction_positive_cal": float(y_true[mask_cal].mean()) if mask_cal.sum() > 0 else np.nan,
+            "mean_predicted_cal": float(calibrated_scores[mask_cal].mean()) if mask_cal.sum() > 0 else np.nan,
+            "count_cal": int(mask_cal.sum()),
+        })
+    cal_curve = pd.DataFrame(curve_rows)
+
+    logger.info(
+        f"校正完了: フィット={len(cal_idx)}ペア, "
+        f"raw_mean={y_score.mean():.3f} → cal_mean={calibrated_scores.mean():.3f}"
+    )
+    return calibrated_pair_results, cal_curve
+
+
 # ── メイン ────────────────────────────────────────────────────
 
 
@@ -489,13 +579,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--irl-model",
         type=Path,
-        default=Path("outputs/cross_temporal_v39/train_0-3m/irl_model.pt"),
+        default=Path("outputs/mce_irl/train_0-3m/mce_irl_model.pt"),
+        help="グローバル MCE-IRL モデル (state_dim=20) のパス",
     )
     p.add_argument(
         "--irl-dir-model",
         type=Path,
         default=None,
-        help="ディレクトリ単位IRLモデルのパス（state_dim=23）",
+        help="ディレクトリ単位 MCE-IRL モデル (state_dim=23) のパス",
     )
     p.add_argument("--prediction-time", type=str, default="2014-01-01")
     p.add_argument("--delta-months", type=int, default=3)
@@ -515,12 +606,30 @@ def parse_args() -> argparse.Namespace:
                    help="RFの訓練ラベル窓の開始オフセット（未指定時は--future-start-monthsと同じ）")
     p.add_argument("--rf-train-end", type=str, default=None,
                    help="RF_Dirの学習ラベル基準日（IRL train_endと揃える）")
-    p.add_argument("--device", type=str, default="cpu")
+    p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--n-jobs", type=int, default=-1,
+                   help="joblib 並列数（-1=全コア）")
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument(
         "--multi-timepoint",
         action="store_true",
         help="複数時点で評価（3ヶ月刻み）",
+    )
+    p.add_argument(
+        "--save-importance",
+        action="store_true",
+        help="IRL gradient importance と RF_Dir Gini importance を保存する",
+    )
+    p.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="IsotonicRegression で IRL_Dir 出力を事後校正する",
+    )
+    p.add_argument(
+        "--calibration-fraction",
+        type=float,
+        default=0.3,
+        help="校正フィットに使う (dev, dir) ペアの割合（残りで評価）",
     )
     return p.parse_args()
 
@@ -538,6 +647,11 @@ def evaluate_single_timepoint(
     future_start_months: int = 0,
     rf_train_end: Optional[datetime] = None,
     rf_future_start_months: Optional[int] = None,
+    n_jobs: int = -1,
+    save_importance: bool = False,
+    output_dir: Optional[Path] = None,
+    calibrate: bool = False,
+    calibration_fraction: float = 0.3,
 ) -> Dict[str, Dict[str, float]]:
     """単一時点の評価を実行し、全手法の結果を返す。"""
     # RF訓練ラベル窓（未指定なら評価窓と同じ = 従来動作）
@@ -599,6 +713,7 @@ def evaluate_single_timepoint(
         df, prediction_time, delta_months, window_days, dir_developers,
         future_start_months=rf_future_start_months,
         rf_train_end=rf_train_end,
+        n_jobs=n_jobs,
     )
 
     # 5. Ground truth
@@ -655,18 +770,23 @@ def evaluate_single_timepoint(
             df=df,
             history_start=dir_history_start,
         )
+        # (dev, dir) ペアをフラット化して一括推論
+        head_index = future_start_months // 3
+        pairs = [(d, dev) for d, devs in dir_developers.items() for dev in devs]
+        logger.info(f"IRL_Dir: {len(pairs)} ペアを推論...")
+
+        pair_results = []
+        for d, dev in pairs:
+            prob = dir_predictor.predict_developer_directory(
+                dev, d, prediction_time, path_extractor=path_extractor,
+                head_index=head_index,
+            )
+            pair_results.append((d, dev, prob))
+
         irl_dir_agg: Dict[str, float] = {}
-        for d, devs in dir_developers.items():
-            dir_sum = 0.0
-            for dev in devs:
-                head_index = future_start_months // 3
-                prob = dir_predictor.predict_developer_directory(
-                    dev, d, prediction_time, path_extractor=path_extractor,
-                    head_index=head_index,
-                )
-                irl_dir_probs.setdefault(d, {})[dev] = prob
-                dir_sum += prob
-            irl_dir_agg[d] = dir_sum
+        for d, dev, prob in pair_results:
+            irl_dir_probs.setdefault(d, {})[dev] = prob
+            irl_dir_agg[d] = irl_dir_agg.get(d, 0.0) + prob
 
         methods["IRL_Dir"] = irl_dir_agg
         metrics = compute_metrics(irl_dir_agg, actual, "IRL_Dir")
@@ -727,6 +847,154 @@ def evaluate_single_timepoint(
                     + " ".join(f"{k}={v:.3f}" for k, v in clf_m.items())
                 )
 
+        # ── IRL_Dir 校正版 ──
+        if calibrate and pair_results:
+            calibrated_pair_results, cal_curve = calibrate_predictions(
+                pair_results, actual_dir_devs, calibration_fraction,
+            )
+            # 校正済みで集計
+            irl_dir_probs_cal: Dict[str, Dict[str, float]] = {}
+            irl_dir_agg_cal: Dict[str, float] = {}
+            for d, dev, prob in calibrated_pair_results:
+                irl_dir_probs_cal.setdefault(d, {})[dev] = prob
+                irl_dir_agg_cal[d] = irl_dir_agg_cal.get(d, 0.0) + prob
+
+            methods["IRL_Dir_calibrated"] = irl_dir_agg_cal
+            metrics_cal = compute_metrics(irl_dir_agg_cal, actual, "IRL_Dir_calibrated")
+            danger_cal = compute_danger_detection(
+                irl_dir_agg_cal, actual,
+                threshold=danger_threshold,
+                danger_actual_threshold=danger_actual_threshold,
+                method_name="IRL_Dir_calibrated",
+            )
+            all_results["IRL_Dir_calibrated"] = {
+                **metrics_cal,
+                **{f"danger_{k}": v for k, v in danger_cal.items()},
+            }
+            # 校正版の分類評価
+            y_true_cal: List[int] = []
+            y_prob_cal: List[float] = []
+            for d, devs in dir_developers.items():
+                actual_devs_d = actual_dir_devs.get(d, set())
+                for dev in devs:
+                    y_true_cal.append(1 if dev in actual_devs_d else 0)
+                    y_prob_cal.append(irl_dir_probs_cal.get(d, {}).get(dev, 0.5))
+            if y_true_cal:
+                from sklearn.metrics import roc_auc_score as _roc, f1_score as _f1
+                from sklearn.metrics import precision_score as _ps, recall_score as _rs
+                from sklearn.metrics import precision_recall_curve as _prc
+                from sklearn.metrics import auc as _auc
+                _yt = np.array(y_true_cal)
+                _yp = np.array(y_prob_cal)
+                _np = int(_yt.sum()); _nn = len(_yt) - _np
+                if _np > 0 and _nn > 0:
+                    _ar = float(_roc(_yt, _yp))
+                    _pc, _rc, _th = _prc(_yt, _yp)
+                    _ap = float(_auc(_rc, _pc))
+                    _f1s = 2 * (_pc * _rc) / (_pc + _rc + 1e-10)
+                    _bi = np.argmax(_f1s)
+                    _bt = _th[_bi] if _bi < len(_th) else 0.5
+                    _pred = (_yp >= _bt).astype(int)
+                    _cm = {
+                        "auc_roc": _ar, "auc_pr": _ap,
+                        "f1": float(_f1(_yt, _pred, zero_division=0)),
+                        "precision": float(_ps(_yt, _pred, zero_division=0)),
+                        "recall": float(_rs(_yt, _pred, zero_division=0)),
+                        "threshold": float(_bt),
+                        "n_pairs": float(len(_yt)),
+                        "n_pos": float(_np), "n_neg": float(_nn),
+                    }
+                    all_results["IRL_Dir_calibrated"] = {
+                        **all_results.get("IRL_Dir_calibrated", {}),
+                        **{f"clf_{k}": v for k, v in _cm.items()},
+                    }
+                    logger.info(
+                        f"[IRL_Dir_calibrated classification] "
+                        + " ".join(f"{k}={v:.3f}" for k, v in _cm.items())
+                    )
+            # 校正曲線の保存
+            if output_dir is not None and len(cal_curve) > 0:
+                Path(output_dir).mkdir(parents=True, exist_ok=True)
+                cal_path = Path(output_dir) / "calibration_curve.csv"
+                cal_curve.to_csv(cal_path, index=False)
+                logger.info(f"校正曲線を保存: {cal_path}")
+
+        # IRL gradient importance を保存
+        if save_importance and output_dir is not None:
+            try:
+                import torch as _torch
+                from review_predictor.IRL.features.common_features import (
+                    STATE_FEATURES as _SF, ACTION_FEATURES as _AF,
+                )
+                from review_predictor.IRL.features.path_features import PATH_FEATURE_NAMES as _PFN
+                _irl = dir_predictor._irl_system
+                _is_dir = _irl.state_dim > len(_SF)
+                _all_grads_abs = []
+                _all_grads_signed = []
+                _sample_devs = list(all_devs)[:300]
+                for _dev in _sample_devs:
+                    _md = dir_predictor._build_monthly_data(_dev, prediction_time)
+                    _mh, _sd, _sr, _di = _md
+                    if not _mh or _di is None:
+                        continue
+                    # 代表ディレクトリ1つを選択
+                    _dev_dirs = [d for d, devs in dir_developers.items() if _dev in devs]
+                    _d = _dev_dirs[0] if _dev_dirs else None
+                    _spf = None
+                    if _is_dir and _d:
+                        _task = frozenset({_d})
+                        _spf = [path_extractor.compute(_dev, _task, cd) for cd in _sd]
+                    _email = _di.get("email", _di.get("developer_id", _dev))
+                    _st, _at = [], []
+                    for _i, (_mhi, _mctx) in enumerate(zip(_mh, _sd)):
+                        if not _mhi:
+                            _st.append(_torch.zeros(_irl.state_dim))
+                            _at.append(_torch.zeros(_irl.action_dim))
+                            continue
+                        _tp = _sr[_i] if _sr and _i < len(_sr) else 0
+                        _pf = _spf[_i] if _spf and _i < len(_spf) else None
+                        _s, _a = _irl.extract_features_tensor(
+                            _email, _mhi, _mctx, total_project_reviews=_tp,
+                            path_features_vec=_pf,
+                        )
+                        _st.append(_s); _at.append(_a)
+                    if not _st:
+                        continue
+                    _ss = _torch.stack(_st).unsqueeze(0).requires_grad_(True)
+                    _as = _torch.stack(_at).unsqueeze(0).requires_grad_(True)
+                    _ln = _torch.tensor([len(_st)], dtype=_torch.long)
+                    _, _cont = _irl.network(_ss, _as, _ln)
+                    _cont.backward()
+                    _sg_signed = _ss.grad.mean(dim=(0, 1)).detach().cpu().numpy()
+                    _ag_signed = _as.grad.mean(dim=(0, 1)).detach().cpu().numpy()
+                    _all_grads_signed.append(np.concatenate([_sg_signed, _ag_signed]))
+                    _sg_abs = _ss.grad.abs().mean(dim=(0, 1)).detach().cpu().numpy()
+                    _ag_abs = _as.grad.abs().mean(dim=(0, 1)).detach().cpu().numpy()
+                    _all_grads_abs.append(np.concatenate([_sg_abs, _ag_abs]))
+                if _all_grads_abs:
+                    _sn = list(_SF) + (list(_PFN) if _is_dir else [])
+                    _names = _sn + list(_AF)
+                    import json as _json
+                    # 絶対値版
+                    _mg = np.mean(_all_grads_abs, axis=0)
+                    _tot = _mg.sum()
+                    if _tot > 0:
+                        _mg = _mg / _tot
+                    _imp = {n: float(v) for n, v in zip(_names, _mg)}
+                    _imp_path = Path(output_dir) / "irl_feature_importance.json"
+                    with open(_imp_path, "w") as f:
+                        _json.dump(_imp, f, indent=2, ensure_ascii=False)
+                    logger.info(f"IRL importance (abs) を保存: {_imp_path} ({len(_all_grads_abs)} samples)")
+                    # 符号付き版
+                    _mg_s = np.mean(_all_grads_signed, axis=0)
+                    _imp_s = {n: float(v) for n, v in zip(_names, _mg_s)}
+                    _imp_s_path = Path(output_dir) / "irl_feature_importance_signed.json"
+                    with open(_imp_s_path, "w") as f:
+                        _json.dump(_imp_s, f, indent=2, ensure_ascii=False)
+                    logger.info(f"IRL importance (signed) を保存: {_imp_s_path}")
+            except Exception as e:
+                logger.warning(f"IRL importance 計算で例外: {e}")
+
     # ── RF_Dir: ディレクトリ単位 RF ──
     logger.info("RF_Dir: ディレクトリ単位 RF で推論...")
     if rf_train_end is not None:
@@ -754,7 +1022,20 @@ def evaluate_single_timepoint(
         clf_dir = RFC(n_estimators=100, class_weight="balanced", random_state=42, n_jobs=-1)
         clf_dir.fit(X_train_dir, y_train_dir)
 
-        # 推論: 各 (dev, dir) ペアの continuation_prob
+        # RF_Dir Gini importance を保存
+        if save_importance and output_dir is not None:
+            from review_predictor.IRL.features.common_features import FEATURE_NAMES_WITH_PATH as _FN_PATH
+            rf_importance = {
+                name: float(val)
+                for name, val in zip(_FN_PATH, clf_dir.feature_importances_)
+            }
+            import json as _json
+            rf_imp_path = Path(output_dir) / "rf_dir_feature_importance.json"
+            with open(rf_imp_path, "w") as f:
+                _json.dump({"feature_importance": rf_importance}, f, indent=2, ensure_ascii=False)
+            logger.info(f"RF_Dir importance を保存: {rf_imp_path}")
+
+        # 推論: 各 (dev, dir) ペアの continuation_prob（並列）
         from review_predictor.IRL.features.common_features import FEATURE_NAMES_WITH_PATH
         from review_predictor.IRL.features.path_features import PATH_FEATURE_NAMES
 
@@ -762,22 +1043,28 @@ def evaluate_single_timepoint(
         rf_dir_agg: Dict[str, float] = {}
         rf_dir_dev_probs: Dict[str, Dict[str, float]] = {}
 
-        for d, devs in dir_developers.items():
-            dir_sum = 0.0
-            for dev in devs:
-                common_feats = extract_common_features(
-                    df, dev, feature_start, prediction_time, normalize=False,
-                )
-                pf = path_extractor.compute(dev, frozenset({d}), prediction_time)
-                path_feats = {
-                    name: float(val) for name, val in zip(PATH_FEATURE_NAMES, pf)
-                }
-                feat_row = {**common_feats, **path_feats}
-                X = np.array([[feat_row.get(f, 0.0) for f in FEATURE_NAMES_WITH_PATH]], dtype=np.float64)
-                prob = float(clf_dir.predict_proba(X)[0, 1])
-                rf_dir_dev_probs.setdefault(d, {})[dev] = prob
-                dir_sum += prob
-            rf_dir_agg[d] = dir_sum
+        rf_dir_pairs = [(d, dev) for d, devs in dir_developers.items() for dev in devs]
+        logger.info(f"RF_Dir: {len(rf_dir_pairs)} ペアを並列推論 (n_jobs={n_jobs})...")
+
+        def _rf_dir_predict_one(d, dev):
+            common_feats = extract_common_features(
+                df, dev, feature_start, prediction_time, normalize=False,
+            )
+            pf = path_extractor.compute(dev, frozenset({d}), prediction_time)
+            path_feats = {
+                name: float(val) for name, val in zip(PATH_FEATURE_NAMES, pf)
+            }
+            feat_row = {**common_feats, **path_feats}
+            X = np.array([[feat_row.get(f, 0.0) for f in FEATURE_NAMES_WITH_PATH]], dtype=np.float64)
+            prob = float(clf_dir.predict_proba(X)[0, 1])
+            return d, dev, prob
+
+        rf_dir_results = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_rf_dir_predict_one)(d, dev) for d, dev in rf_dir_pairs
+        )
+        for d, dev, prob in rf_dir_results:
+            rf_dir_dev_probs.setdefault(d, {})[dev] = prob
+            rf_dir_agg[d] = rf_dir_agg.get(d, 0.0) + prob
 
         methods["RF_Dir"] = rf_dir_agg
         metrics = compute_metrics(rf_dir_agg, actual, "RF_Dir")
@@ -881,6 +1168,7 @@ def evaluate_single_timepoint(
     # 8. (developer, directory) ペアごとの予測結果を CSV 保存
     # rf_dir_dev_probs がスコープ内に存在しない場合は空辞書
     _rf_dir_dev_probs = rf_dir_dev_probs if 'rf_dir_dev_probs' in dir() else {}
+    _irl_dir_probs_cal = irl_dir_probs_cal if 'irl_dir_probs_cal' in dir() else {}
     pair_rows: List[Dict] = []
     for d, devs in dir_developers.items():
         actual_devs = actual_dir_devs.get(d, set())
@@ -890,6 +1178,7 @@ def evaluate_single_timepoint(
                 "directory": d,
                 "label": 1 if dev in actual_devs else 0,
                 "irl_dir_prob": irl_dir_probs.get(d, {}).get(dev, None),
+                "irl_dir_prob_calibrated": _irl_dir_probs_cal.get(d, {}).get(dev, None),
                 "rf_dir_prob": _rf_dir_dev_probs.get(d, {}).get(dev, None),
                 "irl_global_prob": continuation_probs.get(dev, None),
                 "rf_global_prob": rf_probs.get(dev, None),
@@ -998,6 +1287,11 @@ def main() -> None:
             future_start_months=args.future_start_months,
             rf_train_end=rf_train_end_dt,
             rf_future_start_months=rf_fsm,
+            n_jobs=args.n_jobs,
+            save_importance=args.save_importance,
+            output_dir=args.output_dir,
+            calibrate=args.calibrate,
+            calibration_fraction=args.calibration_fraction,
         )
 
         # CSV 保存

@@ -2,10 +2,8 @@
 
 Usage:
     uv run python scripts/pipeline/fetch_gerrit_openstack.py
-    uv run python scripts/pipeline/fetch_gerrit_openstack.py --output data/foo.json
 """
 
-import argparse
 import json
 import logging
 from pathlib import Path
@@ -41,19 +39,11 @@ def fetch_gerrit_openstack():
     return active_repositories
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Fetch active OpenStack projects from Gerrit.")
-    parser.add_argument("--output", type=Path, default=OUT, help=f"出力先 (default: {OUT})")
-    args = parser.parse_args()
-
+if __name__ == "__main__":
     projects = fetch_gerrit_openstack()
 
     if projects and "error" not in projects:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with open(args.output, 'w') as f:
+        OUT.parent.mkdir(parents=True, exist_ok=True)
+        with open(OUT, 'w') as f:
             json.dump(projects, f, indent=4, ensure_ascii=False)
-        logger.info(f"Saved {len(projects)} active Gerrit OpenStack projects to {args.output}")
-
-
-if __name__ == "__main__":
-    main()
+        logger.info(f"Saved {len(projects)} active Gerrit OpenStack projects to {OUT}")

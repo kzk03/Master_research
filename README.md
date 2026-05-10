@@ -13,7 +13,7 @@ uv pip install -e .  # パッケージインストール
 uv run python scripts/train/train_model.py --help
 
 # 予測結果の評価（複数プロジェクトのJSON指定やRFの将来窓の個別設定に対応）
-uv run python scripts/analyze/eval_path_prediction.py \
+uv run python scripts/analyze/eval/eval_path_prediction.py \
     --raw-json data/raw_json/openstack__nova.json data/raw_json/other_project.json \
     --rf-future-start-months 1
 ```
