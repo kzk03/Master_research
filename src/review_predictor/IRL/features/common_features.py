@@ -373,8 +373,7 @@ def extract_common_features(
     #     例: 24ヶ月窓で12ヶ月活動 → 0.5
     total_months = max(int((feature_end - feature_start).days / 30), 1)
     active_months = dev_data['timestamp'].dt.to_period('M').nunique() if len(dev_data) > 0 else 0
-    # active_months_ratio is now just active_months
-    active_months_ratio = float(active_months)
+    active_months_ratio = min(active_months / total_months, 1.0)
 
     # 18. response_time_trend: 応答速度のトレンド（-1.0〜+1.0）
     #     前半の平均応答速度 vs 後半の平均応答速度を比較。
@@ -435,7 +434,7 @@ def extract_common_features(
                 streak += 1
             else:
                 break
-        recent_rejection_streak = float(streak)
+        recent_rejection_streak = min(streak / 10.0, 1.0)
     else:
         recent_rejection_streak = 0.0
 
