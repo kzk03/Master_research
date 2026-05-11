@@ -37,7 +37,7 @@ FEATURE_META = [
     ("avg_activity_gap",           "平均活動間隔",     "state"),
     ("activity_trend",             "月次活動変化率",   "state"),
     ("collaboration_score",        "協力スコア",       "state"),
-    ("code_quality_score",         "総承諾率",         "state"),
+    ("overall_acceptance_rate",         "総承諾率",         "state"),
     ("recent_acceptance_rate",     "最近の承諾率",     "state"),
     ("review_load",                "レビュー負荷",     "state"),
     ("days_since_last_activity",   "最終活動経過日数", "state"),

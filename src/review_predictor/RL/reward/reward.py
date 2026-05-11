@@ -363,7 +363,7 @@ class IRLReward(RewardFunction):
 # ║   0: experience_days          1: total_changes                        ║
 # ║   2: total_reviews            3: recent_activity_frequency            ║
 # ║   4: avg_activity_gap         5: activity_trend                       ║
-# ║   6: collaboration_score      7: code_quality_score                   ║
+# ║   6: collaboration_score      7: overall_acceptance_rate                   ║
 # ║   8: recent_acceptance_rate   9: review_load                          ║
 # ║  10: avg_action_intensity    11: avg_collaboration                    ║
 # ║  12: avg_response_time       13: avg_review_size                      ║

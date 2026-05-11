@@ -104,7 +104,7 @@ logger = logging.getLogger(__name__)
 # FEATURE_NAMES の中身:
 #   ['experience_days', 'total_changes', 'total_reviews',
 #    'recent_activity_frequency', 'avg_activity_gap', 'activity_trend',
-#    'collaboration_score', 'code_quality_score', 'recent_acceptance_rate',
+#    'collaboration_score', 'overall_acceptance_rate', 'recent_acceptance_rate',
 #    'review_load',                                    ← ここまで状態特徴量（10次元）
 #    'avg_action_intensity', 'avg_collaboration',
 #    'avg_response_time', 'avg_review_size']           ← 行動特徴量（4次元）

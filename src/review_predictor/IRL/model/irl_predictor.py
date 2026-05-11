@@ -31,7 +31,7 @@ class DeveloperState:
     avg_activity_gap: float
     activity_trend: str
     collaboration_score: float
-    code_quality_score: float
+    overall_acceptance_rate: float
     recent_acceptance_rate: float  # 直近30日のレビュー受諾率
     review_load: float  # レビュー負荷（直近30日 / 平均）
     # マルチプロジェクト対応: 以下4つの特徴量を追加
@@ -481,8 +481,8 @@ class RetentionIRLSystem:
         # 協力スコア（簡易版）
         collaboration_score = self._calculate_collaboration_score(activity_history)
 
-        # コード品質スコア（簡易版）
-        code_quality_score = self._calculate_code_quality_score(activity_history)
+        # 全期間承諾率（簡易版）
+        overall_acceptance_rate = self._calculate_overall_acceptance_rate(activity_history)
 
         # 最近のレビュー受諾率（直近30日）
         recent_acceptance_rate = self._calculate_recent_acceptance_rate(activity_history, context_date, days=30)
@@ -499,7 +499,7 @@ class RetentionIRLSystem:
             avg_activity_gap=avg_activity_gap,
             activity_trend=activity_trend,
             collaboration_score=collaboration_score,
-            code_quality_score=code_quality_score,
+            overall_acceptance_rate=overall_acceptance_rate,
             recent_acceptance_rate=recent_acceptance_rate,
             review_load=review_load,
             # マルチプロジェクト対応: 新しい特徴量を追加
@@ -590,7 +590,7 @@ class RetentionIRLSystem:
             min(state.avg_activity_gap / 60.0, 1.0),  # 60日でキャップ
             trend_encoding.get(state.activity_trend, 0.25), # 既に0-1
             min(state.collaboration_score, 1.0),      # 既に0-1
-            min(state.code_quality_score, 1.0),       # 既に0-1
+            min(state.overall_acceptance_rate, 1.0),       # 既に0-1
             min(state.recent_acceptance_rate, 1.0),   # 既に0-1（直近30日の受諾率）
             min(state.review_load, 1.0),              # 既に0-1（負荷比率、正規化済み）
             # マルチプロジェクト対応: 新しい特徴量（4次元）
@@ -701,7 +701,7 @@ class RetentionIRLSystem:
                     'experience_days': state.experience_days,
                     'recent_activity_frequency': state.recent_activity_frequency,
                     'collaboration_score': state.collaboration_score,
-                    'code_quality_score': state.code_quality_score
+                    'overall_acceptance_rate': state.overall_acceptance_rate
                 }
             }
     
@@ -796,8 +796,8 @@ class RetentionIRLSystem:
         
         return collaboration_count / total_activities
     
-    def _calculate_code_quality_score(self, activity_history: List[Dict[str, Any]]) -> float:
-        """コード品質スコアを計算（簡易版）"""
+    def _calculate_overall_acceptance_rate(self, activity_history: List[Dict[str, Any]]) -> float:
+        """全期間承諾率を計算（簡易版）"""
         
         quality_indicators = ['test', 'documentation', 'refactor', 'fix']
         total_activities = len(activity_history)
@@ -1394,7 +1394,7 @@ class RetentionIRLSystem:
     IRL_STATE_FEATURE_NAMES = [
         'experience_days', 'total_changes', 'total_reviews',
         'recent_activity_frequency', 'avg_activity_gap', 'activity_trend',
-        'collaboration_score', 'code_quality_score',
+        'collaboration_score', 'overall_acceptance_rate',
         'recent_acceptance_rate', 'review_load',
         'project_count', 'project_activity_distribution',
         'main_project_contribution_ratio', 'cross_project_collaboration_score',
