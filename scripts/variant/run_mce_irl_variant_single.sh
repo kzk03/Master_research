@@ -40,19 +40,34 @@ esac
 
 export CUDA_VISIBLE_DEVICES="$GPU_ID"
 
-REVIEWS="data/combined_raw.csv"
-RAW_JSON=(
-    data/raw_json/openstack__nova.json
-    data/raw_json/openstack__cinder.json
-    data/raw_json/openstack__neutron.json
-    data/raw_json/openstack__ironic.json
-    data/raw_json/openstack__glance.json
-    data/raw_json/openstack__keystone.json
-    data/raw_json/openstack__horizon.json
-    data/raw_json/openstack__swift.json
-    data/raw_json/openstack__heat.json
-    data/raw_json/openstack__octavia.json
-)
+# プロジェクト集合の差し替えは環境変数で行う:
+#   REVIEWS              : 統合済み CSV (default: 旧10 repos の data/combined_raw.csv)
+#   RAW_JSON_LIST_FILE   : raw_json パスをスペース区切りで持つテキストファイル
+#                          (filter_combined.py の副産物 *.raw_json_list.txt がそのまま使える)
+# 例: REVIEWS=data/combined_raw_main32.csv \
+#     RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
+#     bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline outputs/main32_mce 0
+REVIEWS="${REVIEWS:-data/combined_raw.csv}"
+if [ -n "${RAW_JSON_LIST_FILE:-}" ]; then
+    if [ ! -f "$RAW_JSON_LIST_FILE" ]; then
+        echo "ERROR: RAW_JSON_LIST_FILE が見つからない: $RAW_JSON_LIST_FILE" >&2
+        exit 1
+    fi
+    read -r -a RAW_JSON <<< "$(cat "$RAW_JSON_LIST_FILE")"
+else
+    RAW_JSON=(
+        data/raw_json/openstack__nova.json
+        data/raw_json/openstack__cinder.json
+        data/raw_json/openstack__neutron.json
+        data/raw_json/openstack__ironic.json
+        data/raw_json/openstack__glance.json
+        data/raw_json/openstack__keystone.json
+        data/raw_json/openstack__horizon.json
+        data/raw_json/openstack__swift.json
+        data/raw_json/openstack__heat.json
+        data/raw_json/openstack__octavia.json
+    )
+fi
 TRAIN_START="2019-01-01"
 TRAIN_END="2022-01-01"
 EVAL_CUTOFF="2023-01-01"
