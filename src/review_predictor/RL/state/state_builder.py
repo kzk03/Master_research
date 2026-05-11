@@ -102,10 +102,10 @@ logger = logging.getLogger(__name__)
 
 # Phase 1（卒論）からそのまま引き継ぐミクロ特徴量（14次元）
 # FEATURE_NAMES の中身:
-#   ['experience_days', 'total_changes', 'total_reviews',
+#   ['window_tenure_days', 'total_changes', 'total_reviews',
 #    'recent_activity_frequency', 'avg_activity_gap', 'activity_trend',
-#    'collaboration_score', 'overall_acceptance_rate', 'recent_acceptance_rate',
-#    'review_load',                                    ← ここまで状態特徴量（10次元）
+#    'unique_collaborator_count', 'overall_acceptance_rate', 'recent_acceptance_rate',
+#    'recent_load_ratio_30d_all',                                    ← ここまで状態特徴量（10次元）
 #    'avg_action_intensity', 'avg_collaboration',
 #    'avg_response_time', 'avg_review_size']           ← 行動特徴量（4次元）
 MICRO_FEATURES: List[str] = FEATURE_NAMES  # IRL/features/common_features.py 参照
@@ -209,7 +209,7 @@ class StateBuilder:
 
         使い方:
             builder = StateBuilder()
-            print(builder.feature_names)  # ['experience_days', ...]
+            print(builder.feature_names)  # ['window_tenure_days', ...]
         """
         names = list(MICRO_FEATURES)   # コピーして元のリストを変えないようにする
         if self.use_macro:
@@ -235,7 +235,7 @@ class StateBuilder:
     # ── B-4,5: メイン API ────────────────────────────────────────────────
     # 【変更できること】
     # ・build() に前処理を追加できる
-    #   例: 異常値のクリッピング（review_load が 10 以上なら 1.0 に丸めるなど）
+    #   例: 異常値のクリッピング（recent_load_ratio_30d_all が 10 以上なら 1.0 に丸めるなど）
     #       vector = np.clip(vector, 0.0, 1.0)  ← normalize 後に追加
     # ・build_all() を並列化できる
     #   例: joblib の Parallel を使って複数開発者を同時計算
@@ -277,7 +277,7 @@ class StateBuilder:
         feature_end = current_time
 
         # 卒論の特徴量計算関数を呼ぶ（IRL/features/common_features.py）
-        # 戻り値は辞書: {'experience_days': 180.0, 'total_changes': 45.0, ...}
+        # 戻り値は辞書: {'window_tenure_days': 180.0, 'total_changes': 45.0, ...}
         features = extract_common_features(
             df=df,
             email=developer_id,
@@ -288,7 +288,7 @@ class StateBuilder:
 
         # 辞書 → numpy 配列に変換
         # MICRO_FEATURES の順番通りに値を並べる（順番が重要！）
-        # 例: features["experience_days"] → vector[0]
+        # 例: features["window_tenure_days"] → vector[0]
         #     features["total_changes"]   → vector[1]  など
         vector = np.array([features[name] for name in MICRO_FEATURES], dtype=np.float32)
 
