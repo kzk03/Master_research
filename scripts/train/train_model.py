@@ -1153,13 +1153,13 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=50,
+        default=150,
         help="訓練エポック数（early stoppingあり）"
     )
     parser.add_argument(
         "--patience",
         type=int,
-        default=5,
+        default=15,
         help="Early stopping の patience（何エポック改善なしで停止）"
     )
     parser.add_argument(
