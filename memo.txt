@@ -5,9 +5,9 @@
 # Local → Server
 rsync -avz --exclude='.git/' --progress /Users/kazuki-h/Master_research socsel:/mnt/data1/kazuki-h/
 
-rsync -avz --exclude='.git/' --progress /Users/kazuki-h/Master_research/scripts/ socsel:/mnt/data1/kazuki-h/Master_research_v2/scripts/
+rsync -avz --exclude='.git/' --exclude='*.pkl' --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/Master_research_v2/
 
-rsync -avz --progress /Users/kazuki-h/Master_research/outputs/mce_pilot_multiwindow/ socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/mce_pilot_multiwindow/
+rsync -avz --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/Master_research_v2/
 
 # Server → Local
 rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
