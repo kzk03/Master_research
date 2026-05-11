@@ -3,7 +3,7 @@
 # 訓練・評価ともに並列実行
 #
 # 使い方:
-#   bash scripts/run_variant_single.sh <variant_id> <variant_name> [outbase]
+#   bash scripts/variant/run_variant_single.sh <variant_id> <variant_name> [outbase]
 
 set -e
 
@@ -58,7 +58,7 @@ run_eval() {
     if [ "$SAVE_IMPORTANCE" = "true" ]; then
         importance_flag="--save-importance"
     fi
-    uv run python scripts/analyze/eval_path_prediction.py \
+    uv run python scripts/analyze/eval/eval_path_prediction.py \
         --data "$REVIEWS" \
         --raw-json "${RAW_JSON[@]}" \
         --prediction-time "$EVAL_CUTOFF" \

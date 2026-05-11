@@ -3,9 +3,9 @@
 # イベント単位系列の実験スクリプト (state_dim = 27)
 # ============================================================
 # 訓練: scripts/train/train_model_event.py        (state_dim=27)
-# 評価: scripts/analyze/eval_mce_event_irl_path_prediction.py (state_dim=27)
+# 評価: scripts/analyze/eval/eval_mce_event_irl_path_prediction.py (state_dim=27)
 #
-# 月次集約パイプライン (state_dim=23) は scripts/run_variant_single.sh
+# 月次集約パイプライン (state_dim=23) は scripts/variant/run_variant_single.sh
 # 側で完結している。本スクリプトはイベント単位専用で、月次評価器
 # (eval_path_prediction.py) は使用しない。
 #
@@ -60,7 +60,7 @@ run_eval() {
     # イベント単位評価器 (state_dim=27 対応)。月次評価器 eval_path_prediction.py
     # は state_dim=23 用なので使わない。--window-days は予測器内のスライディング
     # ウィンドウ既定値 (180) と一致させて訓練側と整合させる。
-    uv run python scripts/analyze/eval_mce_event_irl_path_prediction.py \
+    uv run python scripts/analyze/eval/eval_mce_event_irl_path_prediction.py \
         --data "$REVIEWS" \
         --raw-json "${RAW_JSON[@]}" \
         --prediction-time "$EVAL_CUTOFF" \

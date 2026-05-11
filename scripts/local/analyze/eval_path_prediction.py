@@ -13,7 +13,7 @@
   - Linear: 過去の貢献者数推移から線形外挿
 
 使い方:
-    python scripts/analyze/eval_path_prediction.py \
+    python scripts/analyze/eval/eval_path_prediction.py \
         --data data/nova_raw.csv \
         --raw-json data/raw_json/openstack__nova.json \
         --irl-model outputs/cross_temporal_v39/train_0-3m/irl_model.pt \
