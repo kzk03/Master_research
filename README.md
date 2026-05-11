@@ -11,12 +11,180 @@ uv pip install -e .  # パッケージインストール
 
 # スクリプト実行
 uv run python scripts/train/train_model.py --help
-
-# 予測結果の評価（複数プロジェクトのJSON指定やRFの将来窓の個別設定に対応）
-uv run python scripts/analyze/eval/eval_path_prediction.py \
-    --raw-json data/raw_json/openstack__nova.json data/raw_json/other_project.json \
-    --rf-future-start-months 1
 ```
+
+## 🐳 Docker
+
+リポジトリ直下の `compose.yaml` でコンテナ `irl_dir_v2` を起動し、ホスト側のリポジトリを
+`/app/` に bind mount して実行する。学習・評価はこの中で回すのが基本。
+
+`compose.yaml` が参照する `UID` / `GID` / `USERNAME` はリポジトリ直下の `.env`
+(gitignore 対象) で管理する。新しい環境では `id -u` / `id -g` / `whoami` の値を
+`.env` に書いておく。
+
+```bash
+# 1. コンテナをバックグラウンドで起動
+docker compose up -d --build      # 初回 or Dockerfile 変更時
+docker compose up -d              # 2 回目以降
+
+# 2. コンテナに入る
+docker exec -it irl_dir_v2 bash
+
+# 以降、コンテナ内で uv コマンド・パイプラインを実行
+#   例: bash scripts/run_mce_pipeline.sh main32
+
+# 3. 停止
+docker compose down
+```
+
+以降の `scripts/...` の例はコンテナ内 / ホスト側どちらでも同じコマンドで動く。
+
+## 🔁 End-to-End パイプライン (データ収集 → 評価)
+
+研究対象スコープは現在 **32 main repos**（OpenStack governance の service teams、sunbeam を除く）。
+プロジェクト集合は任意のサブセットに切り替え可能（10 旧スコープ / 32 main / 244 full / tier 別など）。
+
+### TL;DR
+
+データが揃っていれば、以下 1 コマンドで filter → MCE-IRL 学習 → 評価まで一気通貫:
+
+```bash
+# 長時間実行になるため nohup とマルチスレッド制限を入れてバックグラウンド実行を推奨
+# ※ スレッド数は (搭載CPUコア数 ÷ 並列プロセス数) を目安に調整してください (40コア・4並列の場合は 8 程度)
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce 0 > logs/main32_mce.log 2>&1 &
+
+# ログの確認
+tail -f logs/main32_mce.log
+```
+
+デフォルトで variant 0 (LSTM) のみ実行。LSTM+Attention / Transformer はスクリプト末尾で
+コメントアウトしてあるので必要時に復元する。詳細は下の Step 1〜7。
+
+### Step 1. Gerrit データ収集
+
+`scripts/pipeline/collect_service_teams.sh` が `data/service_teams_repos.csv` (245 repos) を読み、
+Gerrit API から per-repo の JSON と整形済み CSV を取得する。既に取得済みの repo はスキップされる。
+
+```bash
+# 全 244 repos を取得 (sunbeam-charms を除く)
+bash scripts/pipeline/collect_service_teams.sh
+
+# tier や並列度を絞って取得
+bash scripts/pipeline/collect_service_teams.sh 大              # 大規模 tier のみ
+bash scripts/pipeline/collect_service_teams.sh 中,小  6        # 中・小、並列 6
+
+# 失敗ログ: logs/collect_service_teams/<repo>.log
+```
+
+出力:
+- `data/raw_json/openstack__<repo>.json` … Gerrit API 生データ (change → file path マッピング用)
+- `data/raw_csv/openstack__<repo>.csv` … per-repo 整形済みレビュー依頼データ
+
+### Step 2. 全 repo を 1 ファイルに統合
+
+```bash
+uv run python scripts/prepare_combined_data.py
+# → data/combined_raw_<N>.csv  (N = 統合できた repo 数。例: 231)
+```
+
+`data/service_teams_repos.csv` の `excluded_reason` が空の repo のみ取り込む。
+tier 別行数・欠損 repo などの統計が stdout に表示される。
+
+### Step 3. プロジェクト集合を絞ってサブセットを生成
+
+`scripts/pipeline/filter_combined.py` で、統合済み CSV から任意のサブセットを切り出す。
+学習対象を切り替えるたびに収集をやり直す必要はない。
+
+```bash
+# 32 main repos のみ抽出 (推奨デフォルト)
+uv run python scripts/pipeline/filter_combined.py --main
+# → data/combined_raw_main32.csv
+# → data/combined_raw_main32.raw_json_list.txt  (対応する raw_json パス一覧)
+
+# tier 別 / team 別 / プロジェクト直接指定も可
+uv run python scripts/pipeline/filter_combined.py --tier 大
+uv run python scripts/pipeline/filter_combined.py --teams nova,neutron
+uv run python scripts/pipeline/filter_combined.py \
+    --projects openstack/nova,openstack/neutron \
+    --output data/combined_raw_pair.csv
+```
+
+副産物の `*.raw_json_list.txt` はスペース区切りの JSON パス列なので、`$(cat ...)` で
+そのまま `--raw-json` に流せる。
+
+
+### Step 4. 本番: バリアント比較 (4 訓練窓 × 10 評価パターン)
+
+TL;DR の `run_mce_pipeline.sh` が呼び出している本体。scope を切り替えた `REVIEWS` /
+`RAW_JSON_LIST_FILE` を環境変数で渡せる。
+
+```bash
+REVIEWS=data/combined_raw_main32.csv \
+RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
+bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline \
+    outputs/main32_mce_variant 0
+# variant_id: 0=LSTM, 1=LSTM+Attention, 2=Transformer (MCE-IRL は二値 action なので 3-5 は非対応)
+```
+
+固定値: `TRAIN_START=2019-01-01`, `TRAIN_END=2022-01-01`, `EVAL_CUTOFF=2023-01-01`,
+`EPOCHS=50`, `PATIENCE=5`, 評価は `--calibrate --n-jobs 4` で並列。
+
+> 教師あり版のバリアント比較は `run_variant_single.sh` (参考比較用)。
+
+### Step 5. 可視化
+
+```bash
+uv run python scripts/analyze/plot/visualize_results.py \
+    --input-dir outputs/main32_mce_variant \
+    --output-dir outputs/figures_main32
+```
+
+出力は PDF（PNG は使用しない方針）。
+
+### 単発デバッグ用例 (1 訓練窓・1 評価パターン)
+
+> ⚠ **本番評価には使わない**。スクリプトの引数確認・小さく回して動作チェックする
+> ための例。本番の学習・評価は Step 6 (= TL;DR の `run_mce_pipeline.sh`) を使う。
+
+主手法は Maximum Causal Entropy IRL (`train_mce_irl.py`)。教師あり Focal Loss を使わない、
+逆強化学習の本来の定式化。Phase 1 の評価・論文の基準モデルはこちら。
+
+```bash
+REVIEWS=data/combined_raw_main32.csv
+RAWJSON=$(cat data/combined_raw_main32.raw_json_list.txt)
+
+# 学習 (デフォ: train 2021-2023, future 0-3m の 1 窓のみ)
+uv run python scripts/train/train_mce_irl.py \
+    --directory-level --model-type 0 \
+    --reviews "$REVIEWS" --raw-json $RAWJSON \
+    --output outputs/main32_mce_irl_debug
+
+# 評価 (1 パターン)
+uv run python scripts/analyze/eval/eval_mce_irl_path_prediction.py \
+    --data "$REVIEWS" --raw-json $RAWJSON \
+    --irl-dir-model outputs/main32_mce_irl_debug/mce_irl_model.pt \
+    --output-dir outputs/main32_mce_eval_debug
+```
+
+`--model-type`: 0=LSTM, 1=LSTM+Attention, 2=Transformer。保存ファイルは `mce_irl_model.pt`。
+
+> **参考比較用 (教師あり Focal-IRL)**: `scripts/train/train_model.py --model-type 0` で
+> `lstm_baseline` を学習。主結果には用いず、MCE-IRL との対照として参照のみ。
+
+
+### プロジェクト集合の切り替え方
+
+学習・評価に渡す `--reviews` と `--raw-json` を差し替えるだけ。各サブセットを
+`data/combined_raw_<tag>.csv` として命名しておけば、Step 4 以降の出力ディレクトリも
+`outputs/<tag>_*` で揃えられ、結果の比較がしやすい。
+
+| 用途             | 生成コマンド                                              | 出力 CSV                       |
+|------------------|-----------------------------------------------------------|--------------------------------|
+| 旧スコープ 10    | `--projects openstack/nova,openstack/neutron,...`         | `combined_raw_custom10.csv`    |
+| **main 32 (推奨)** | `--main`                                                  | `combined_raw_main32.csv`      |
+| 大規模 tier      | `--tier 大`                                               | `combined_raw_tier_大.csv`     |
+| 全 service 244   | (Step 2 の出力)                                           | `combined_raw_231.csv`         |
 
 ## 📚 初学者向けガイド
 
