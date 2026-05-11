@@ -21,7 +21,7 @@ train_mce_event_irl.py を参考にしつつ、マルチクラス accept action 
     uv run python scripts/train/train_mce_event_irl_multiclass.py \
         --trajectories-cache outputs/mce_pilot_event_dev_multiclass/cache/event_traj_0-3.pkl \
         --dir-class-mapping outputs/dir_class_mapping_K15.json \
-        --epochs 50 --patience 5 --model-type 0 \
+        --epochs 150 --patience 15 --model-type 0 \
         --output outputs/mce_pilot_event_dev_multiclass/train_0-3m
 """
 from __future__ import annotations

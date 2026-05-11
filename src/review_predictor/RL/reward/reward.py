@@ -167,8 +167,8 @@ class RewardFunction(ABC):
 # ║  ・_load_model(): TODO 部分。irl_predictor.py の API に合わせて実装     ║
 # ║  ・compute() の irl_score 計算部分: TODO 部分                          ║
 # ║  ・ペナルティの計算式: 現在は線形だが二乗などに変更できる                  ║
-# ║      現在: penalty = weight * review_load                             ║
-# ║      変更: penalty = weight * review_load ** 2  （高負荷を強く罰す）    ║
+# ║      現在: penalty = weight * recent_load_ratio_30d_all                             ║
+# ║      変更: penalty = weight * recent_load_ratio_30d_all ** 2  （高負荷を強く罰す）    ║
 # ║                                                                      ║
 # ║  【変更してはいけないこと】                                              ║
 # ║  ・compute() の引数と戻り値の型（RewardFunction の規約）                ║
@@ -185,7 +185,7 @@ class IRLReward(RewardFunction):
 
         - IRL スコア: 0〜1 の値で「この開発者が継続して貢献する確率」
         - 負荷ペナルティ: workload_penalty_weight > 0 のとき、
-                         review_load が高い開発者に推薦すると報酬が下がる
+                         recent_load_ratio_30d_all が高い開発者に推薦すると報酬が下がる
                          → 自動的に負荷分散を学習させる仕組み
 
     ■ 遅延ロード（Lazy Loading）
@@ -327,14 +327,14 @@ class IRLReward(RewardFunction):
             self.workload_penalty_weight > 0.0
             and action.get("developer_id") == developer_id
         ):
-            # review_load は状態ベクトルの9番目の要素
+            # recent_load_ratio_30d_all は状態ベクトルの9番目の要素
             # （IRL/features/common_features.py の FEATURE_NAMES の順番から決まる）
-            # FEATURE_NAMES = ['experience_days', ..., 'review_load', ...]
+            # FEATURE_NAMES = ['window_tenure_days', ..., 'recent_load_ratio_30d_all', ...]
             #                   index:  0                   9
             REVIEW_LOAD_IDX = 9
 
             if len(state_vector) > REVIEW_LOAD_IDX:
-                # review_load が高いほどペナルティが大きくなる
+                # recent_load_ratio_30d_all が高いほどペナルティが大きくなる
                 penalty = self.workload_penalty_weight * float(state_vector[REVIEW_LOAD_IDX])
 
         # 報酬 = IRL スコア - 負荷ペナルティ
@@ -354,17 +354,17 @@ class IRLReward(RewardFunction):
 # ║  ・活動頻度の高い人を優先:                                               ║
 # ║      return float(state_vector[3])  # recent_activity_frequency       ║
 # ║  ・経験年数に比例した報酬:                                               ║
-# ║      return float(state_vector[0])  # experience_days                 ║
+# ║      return float(state_vector[0])  # window_tenure_days                 ║
 # ║  ・複数指標の組み合わせ:                                                 ║
 # ║      score = 0.5 * state_vector[8] + 0.5 * state_vector[6]           ║
 # ║      return float(score)  # 承諾率 + 協力スコアの平均                   ║
 # ║                                                                      ║
 # ║  【state_vector の各インデックスの意味】                                 ║
-# ║   0: experience_days          1: total_changes                        ║
+# ║   0: window_tenure_days          1: total_changes                        ║
 # ║   2: total_reviews            3: recent_activity_frequency            ║
 # ║   4: avg_activity_gap         5: activity_trend                       ║
-# ║   6: collaboration_score      7: overall_acceptance_rate                   ║
-# ║   8: recent_acceptance_rate   9: review_load                          ║
+# ║   6: unique_collaborator_count      7: overall_acceptance_rate                   ║
+# ║   8: recent_acceptance_rate   9: recent_load_ratio_30d_all                          ║
 # ║  10: avg_action_intensity    11: avg_collaboration                    ║
 # ║  12: avg_response_time       13: avg_review_size                      ║
 # ╚══════════════════════════════════════════════════════════════════════╝

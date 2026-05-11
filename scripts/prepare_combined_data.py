@@ -6,13 +6,15 @@ combined_raw.csv を生成する。
 入力:
   data/service_teams_repos.csv      : 245 行（excluded_reason 列で除外管理）
   data/raw_csv/openstack__*.csv     : collect_service_teams.sh の出力
-  data/{name}_raw.csv               : 旧スクリプト (collect_multiproject.sh) 互換
 
 挙動:
   1. service_teams_repos.csv を読み、excluded_reason が空の行のみ対象
-  2. 各 repo について新パス→旧パスの順で CSV を探し、見つかれば読む
+  2. 各 repo について data/raw_csv/openstack__{name}.csv を読む
   3. 全部を concat して data/combined_raw_{N}.csv に出力（N は実際に読めた repo 数）
   4. 統計（repo 別行数、tier 別行数、欠損 repo）を stdout に表示
+
+旧形式 data/{name}_raw.csv は merge_legacy_raw_csv.py で raw_csv 配下に統合済み。
+新規 legacy ファイルが現れた場合は同スクリプトを再実行すること。
 
 出力ファイル名の自動命名:
   --output 未指定なら data/combined_raw_{N}.csv（旧 combined_raw.csv を上書きしない）
@@ -27,7 +29,7 @@ combined_raw.csv を生成する。
 import argparse
 import csv
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
@@ -41,10 +43,7 @@ def main():
                         help="対象 repo リスト CSV（デフォルト: data/service_teams_repos.csv）")
     parser.add_argument("--raw-csv-dir", type=Path,
                         default=Path("data/raw_csv"),
-                        help="新形式の per-repo CSV ディレクトリ")
-    parser.add_argument("--legacy-data-dir", type=Path,
-                        default=Path("data"),
-                        help="旧形式 {name}_raw.csv のディレクトリ")
+                        help="per-repo CSV ディレクトリ")
     parser.add_argument("--output", type=Path, default=None,
                         help="統合先 CSV（未指定なら data/combined_raw_{N}.csv に自動命名）")
     parser.add_argument("--overwrite", action="store_true",
@@ -74,20 +73,10 @@ def main():
     missing = []         # (team, tier, repo)
 
     for team, tier, repo, _ in targets:
-        repo_name = repo.split("/", 1)[1]               # openstack/nova -> nova
         safe_name = repo.replace("/", "__")             # openstack/nova -> openstack__nova
+        path = args.raw_csv_dir / f"{safe_name}.csv"
 
-        # 新パス優先
-        new_path = args.raw_csv_dir / f"{safe_name}.csv"
-        legacy_path = args.legacy_data_dir / f"{repo_name}_raw.csv"
-
-        if new_path.exists():
-            src = "new"
-            path = new_path
-        elif legacy_path.exists():
-            src = "legacy"
-            path = legacy_path
-        else:
+        if not path.exists():
             missing.append((team, tier, repo))
             continue
 
@@ -98,12 +87,11 @@ def main():
             missing.append((team, tier, repo))
             continue
 
-        # project 列の正規化（旧データは存在しない場合がある）
         if "project" not in df.columns:
             df["project"] = repo
 
         dfs.append(df)
-        stats.append((team, tier, repo, src, len(df)))
+        stats.append((team, tier, repo, len(df)))
 
     # === 3. 統合 ===
     if not dfs:
@@ -135,7 +123,7 @@ def main():
     # tier 別
     tier_rows = defaultdict(int)
     tier_repos = defaultdict(int)
-    for team, tier, repo, src, n in stats:
+    for team, tier, repo, n in stats:
         tier_rows[tier] += n
         tier_repos[tier] += 1
     print("--- tier 別 ---")
@@ -144,18 +132,11 @@ def main():
             print(f"  {t:4s}: {tier_repos[t]:3d} repos, {tier_rows[t]:>10,} rows")
     print()
 
-    # ソース内訳（新パス vs 旧パス）
-    src_count = Counter(s[3] for s in stats)
-    print(f"--- 読み込みソース ---")
-    print(f"  新パス (data/raw_csv/openstack__*.csv): {src_count.get('new', 0)} repos")
-    print(f"  旧パス (data/{{name}}_raw.csv)         : {src_count.get('legacy', 0)} repos")
-    print()
-
     # 行数 Top 15
-    stats_sorted = sorted(stats, key=lambda x: -x[4])
+    stats_sorted = sorted(stats, key=lambda x: -x[3])
     print("--- 行数 Top 15 ---")
-    for team, tier, repo, src, n in stats_sorted[:15]:
-        print(f"  [{tier:4s}] {repo:50s} {n:>8,} rows ({src})")
+    for team, tier, repo, n in stats_sorted[:15]:
+        print(f"  [{tier:4s}] {repo:50s} {n:>8,} rows")
     print()
 
     # 欠損 repo
