@@ -192,6 +192,22 @@ uv run python scripts/analyze/eval/eval_mce_irl_path_prediction.py \
 
 コードの読み方、学習の進め方を段階的に解説しています。
 
+
+## 特徴量分布調査方法
+⏺ 作成しました。                      
+
+  使い方                                                                             
+   
+  # 基本: main32 scope の特徴量分布を集計                                            
+```
+uv run python scripts/analyze/plot/plot_feature_distributions.py --reviews data/combined_raw_main32.csv --train-start 2019-01-01 --train-end 2022-01-01 --output-dir outputs/feature_dist_main32
+```
+
+  # ラベル別（pos / neg / no-request）に分けて重ね描き                               
+```
+uv run python scripts/analyze/plot/plot_feature_distributions.py --reviews data/combined_raw_main32.csv --train-start 2019-01-01 --train-end 2022-01-01 --output-dir outputs/feature_dist_main32_labeled --label-split
+```           
+
 ## 📁 プロジェクト構造
 
 ```
