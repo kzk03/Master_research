@@ -47,3 +47,11 @@ if __name__ == "__main__":
         with open(OUT, 'w') as f:
             json.dump(projects, f, indent=4, ensure_ascii=False)
         logger.info(f"Saved {len(projects)} active Gerrit OpenStack projects to {OUT}")
+        out_txt = OUT.with_suffix('.txt')
+        
+        # テキストファイルとして開いて書き込む
+        with open(out_txt, 'w') as f:
+            for repo_name in projects.keys():
+                f.write(f"{repo_name}\n") # \n（改行）を入れて1行ずつ書き込む
+                
+        logger.info(f"Saved {len(projects)} repository names to {out_txt}")
