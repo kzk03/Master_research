@@ -202,6 +202,7 @@ for i in 0 1 2 3; do
             --future-window-end "$fe" \
             --trajectories-cache "$CACHE_DIR/mce_traj_${win}.pkl" \
             --output "$model_dir" \
+            --skip-threshold \
             "${warm_args[@]}"
         echo "[MCE-IRL $VNAME train_${win}m] 学習完了"
     fi
