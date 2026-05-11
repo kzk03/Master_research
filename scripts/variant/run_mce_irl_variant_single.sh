@@ -79,7 +79,10 @@ TRAIN_FS=(0 3 6 9)
 TRAIN_FE=(3 6 9 12)
 
 # MCE-IRL 専用キャッシュ (既存 outputs/trajectory_cache とは別物)
-CACHE_DIR="outputs/mce_irl_trajectory_cache"
+# CACHE_TAG で scope ごとに分離する (run_mce_pipeline.sh から渡される)。
+# 未指定なら "default" として、旧10 repos デフォルトと scope 指定実行が混ざらないようにする。
+CACHE_TAG="${CACHE_TAG:-default}"
+CACHE_DIR="outputs/mce_irl_trajectory_cache/${CACHE_TAG}"
 mkdir -p "$CACHE_DIR"
 
 # warm-start 設定 (環境変数で制御):

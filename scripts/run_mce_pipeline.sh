@@ -109,7 +109,8 @@ echo "============================================================"
 echo ""
 
 # variant スクリプトに環境変数で渡す
-export REVIEWS RAW_JSON_LIST_FILE="$RAW_JSON_LIST"
+# CACHE_TAG: 軌跡キャッシュを scope ごとに分離するためのキー (TAG をそのまま使う)
+export REVIEWS RAW_JSON_LIST_FILE="$RAW_JSON_LIST" CACHE_TAG="$TAG"
 
 # ── variant 0: LSTM (デフォルト、基本これだけ) ──
 bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline "$OUTBASE" "$GPU_ID"
