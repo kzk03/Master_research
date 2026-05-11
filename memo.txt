@@ -13,3 +13,8 @@ rsync -avz --progress /Users/kazuki-h/Master_research/outputs/mce_pilot_multiwin
 rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
 
 rsync -avz --progress socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/mce_pilot_multiwindow_v2/ /Users/kazuki-h/Master_research/outputs/mce_pilot_multiwindow_v2/
+
+rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/ /Users/kazuki-h/Master_research/outputs/
+
+
+rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
