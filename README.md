@@ -201,19 +201,49 @@ uv run python scripts/analyze/eval/eval_mce_irl_path_prediction.py \
 
 
 ## 特徴量分布調査方法
-⏺ 作成しました。                      
 
-  使い方                                                                             
-   
-  # 基本: main32 scope の特徴量分布を集計                                            
-```
-uv run python scripts/analyze/plot/plot_feature_distributions.py --reviews data/combined_raw_main32.csv --train-start 2019-01-01 --train-end 2022-01-01 --output-dir outputs/feature_dist_main32
+### 1. Raw 特徴量分布（月次スナップショット）
+
+全レビュアー × 全月でスナップショットを取り、生の特徴量分布を可視化する。
+活動がない月もゼロとしてカウントされるため、ゼロ率が高く出る点に注意。
+
+```bash
+# 基本: main32 scope の特徴量分布を集計
+uv run python scripts/analyze/plot/plot_feature_distributions.py \
+    --reviews data/combined_raw_main32.csv \
+    --train-start 2019-01-01 --train-end 2022-01-01 \
+    --output-dir outputs/feature_dist_main32
+
+# ラベル別（pos / neg / no-request）に分けて重ね描き
+uv run python scripts/analyze/plot/plot_feature_distributions.py \
+    --reviews data/combined_raw_main32.csv \
+    --train-start 2019-01-01 --train-end 2022-01-01 \
+    --output-dir outputs/feature_dist_main32_labeled --label-split
 ```
 
-  # ラベル別（pos / neg / no-request）に分けて重ね描き                               
+### 2. 実際のモデル入力分布（軌跡キャッシュから）
+
+MCE-IRL が学習時に使うのと同じロジック (`_precompute_trajectories`) で特徴量を計算し、
+**実際にモデルが見る分布**を可視化する。ディレクトリ親和度（3次元）も含む全 28 次元を出力。
+
+```bash
+# 全体分布（デフォルト）
+uv run python scripts/analyze/plot/plot_trajectory_feature_dist.py \
+    --cache outputs/mce_irl_trajectory_cache/main32/mce_traj_0-3.pkl \
+    --output-dir outputs/feature_dist_trajectory_main32 \
+    --n-jobs -1
+
+# 正例/負例の色分けあり
+uv run python scripts/analyze/plot/plot_trajectory_feature_dist.py \
+    --cache outputs/mce_irl_trajectory_cache/main32/mce_traj_0-3.pkl \
+    --output-dir outputs/feature_dist_trajectory_main32_split \
+    --label-split --n-jobs -1
 ```
-uv run python scripts/analyze/plot/plot_feature_distributions.py --reviews data/combined_raw_main32.csv --train-start 2019-01-01 --train-end 2022-01-01 --output-dir outputs/feature_dist_main32_labeled --label-split
-```           
+
+出力:
+- `trajectory_feature_values.csv`: 全ステップの特徴量値
+- `trajectory_feature_percentiles.csv`: パーセンタイル統計（ゼロ率を含む）
+- 各特徴量の分布プロット（`.png` / `.pdf`）           
 
 ## 📁 プロジェクト構造
 
