@@ -130,6 +130,10 @@ bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline \
 固定値: `TRAIN_START=2019-01-01`, `TRAIN_END=2022-01-01`, `EVAL_CUTOFF=2023-01-01`,
 `EPOCHS=50`, `PATIENCE=5`, 評価は `--calibrate --n-jobs 4` で並列。
 
+学習スクリプトには `--skip-threshold` を常時付与している（訓練データ上の F1 最適閾値計算は
+46928 軌跡の逐次推論で 1 時間以上かかり、かつメイン評価指標 AUC/Spearman は閾値非依存・
+eval 側で別途閾値を再計算しているため不要）。F1 動作点が必要になった場合のみ外す。
+
 > 教師あり版のバリアント比較は `run_variant_single.sh` (参考比較用)。
 
 ### Step 5. 可視化
@@ -155,9 +159,12 @@ REVIEWS=data/combined_raw_main32.csv
 RAWJSON=$(cat data/combined_raw_main32.raw_json_list.txt)
 
 # 学習 (デフォ: train 2021-2023, future 0-3m の 1 窓のみ)
+# --skip-threshold: 訓練データ上の F1 最適閾値計算（46928軌跡を逐次推論、1h+）をスキップ。
+# AUC/Spearman は閾値非依存・eval 側で別途閾値を計算するので外して問題なし。
 uv run python scripts/train/train_mce_irl.py \
     --directory-level --model-type 0 \
     --reviews "$REVIEWS" --raw-json $RAWJSON \
+    --skip-threshold \
     --output outputs/main32_mce_irl_debug
 
 # 評価 (1 パターン)
@@ -250,3 +257,19 @@ Master_research/
 - 提出されたPR（タスク内容）と、各開発者の動的な状態（経験・負荷・パス親和度）を考慮
 - 強化学習（RL）エージェントが、プロジェクト全体の健全性（負荷分散・応答速度・バス係数）を最適化するような推薦戦略を学習
 - 従来の静的なレビュアー推薦ではなく、時間的変化を伴うシミュレーション評価を実施
+
+
+---
+### memo
+--skip-threshold フラグ。メイン評価指標は          
+  AUC/Spearman で閾値非依存（CLAUDE.md にも「IRL 出力は未校正スコア」「clf_auc_roc / spearman
+  が本来の評価指標」とある）ので、run_mce_irl_variant_single.sh:192-205 の uv run python            
+  scripts/train/train_mce_irl.py ... 行に --skip-threshold                                        
+  を足せば閾値計算ステップ自体が消えます。F1
+  ベースの閾値が要らない実験なら、これが一番手っ取り早い。
+
+  ④ 4 訓練窓を並列実行                                                                              
+   
+  run_mce_irl_variant_single.sh:170 の for i in 0 1 2 3 が GPU                                      
+  共有のため逐次ですが、①でメモリ余裕ができれば & + wait で 2〜4 並列に出来ます（同 GPU           
+  上で複数プロセス）。                                                      
