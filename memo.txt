@@ -3,7 +3,6 @@
 # ============================================================
 
 # Local → Server
-rsync -avz --exclude='.git/' --progress /Users/kazuki-h/Master_research socsel:/mnt/data1/kazuki-h/
 
 rsync -avz --exclude='.git/' --exclude='*.pkl' --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/Master_research_v2/
 
@@ -14,7 +13,8 @@ rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
 
 rsync -avz --progress socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/mce_pilot_multiwindow_v2/ /Users/kazuki-h/Master_research/outputs/mce_pilot_multiwindow_v2/
 
-rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/ /Users/kazuki-h/Master_research/outputs/
+rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/main32_mce/ /Users/kazuki-h/Master_research/outputs/main32_mce/
 
 
 rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
+
