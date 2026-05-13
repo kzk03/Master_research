@@ -9,7 +9,7 @@
 # まで run_mce_irl_variant_single.sh 経由で実行する。
 #
 # 使い方:
-#   bash scripts/run_mce_pipeline.sh <scope> [outbase] [gpu_id]
+#   bash scripts/run_mce_pipeline.sh <scope> [outbase] [gpu_id] [save_importance]
 #
 # scope:
 #   main32          → filter_combined.py --main           (32 main repos, 推奨デフォルト)
@@ -29,9 +29,10 @@
 
 set -e
 
-SCOPE="${1:?Usage: $0 <scope> [outbase] [gpu_id]}"
+SCOPE="${1:?Usage: $0 <scope> [outbase] [gpu_id] [save_importance]}"
 OUTBASE_ARG="${2:-}"
 GPU_ID="${3:-0}"
+SAVE_IMPORTANCE="${4:-false}"
 
 # ── scope → (TAG, FILTER_ARGS) ──
 FILTER_ARGS=""
@@ -113,7 +114,7 @@ echo ""
 export REVIEWS RAW_JSON_LIST_FILE="$RAW_JSON_LIST" CACHE_TAG="$TAG"
 
 # ── variant 0: LSTM (デフォルト、基本これだけ) ──
-bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline "$OUTBASE" "$GPU_ID"
+bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline "$OUTBASE" "$GPU_ID" "$SAVE_IMPORTANCE"
 
 # ── variant 1: LSTM + Attention (基本オフ、必要なら復元) ──
 # bash scripts/variant/run_mce_irl_variant_single.sh 1 lstm_attention "$OUTBASE" "$GPU_ID"
