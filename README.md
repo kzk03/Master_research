@@ -54,6 +54,10 @@ docker compose down
 nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
     bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce 0 > logs/main32_mce.log 2>&1 &
 
+# 特徴量重要度も保存する場合 (第4引数に true)
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce 0 true > logs/main32_mce.log 2>&1 &
+
 # ログの確認
 tail -f logs/main32_mce.log
 ```
@@ -125,10 +129,37 @@ RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
 bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline \
     outputs/main32_mce_variant 0
 # variant_id: 0=LSTM, 1=LSTM+Attention, 2=Transformer (MCE-IRL は二値 action なので 3-5 は非対応)
+
+# 特徴量重要度も保存する場合 (第5引数に true)
+REVIEWS=data/combined_raw_main32.csv \
+RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
+bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline \
+    outputs/main32_mce_variant 0 true
 ```
 
+特徴量重要度の出力:
+- `<eval_dir>/irl_feature_importance.json` … gradient × input の絶対値重要度 (28次元)
+- `<eval_dir>/irl_feature_importance_signed.json` … 符号付き重要度 (正=継続促進, 負=離脱促進)
+- `<eval_dir>/rf_dir_feature_importance.json` … RF_Dir の Gini importance
+
+#### 既存モデルから重要度だけ取得（再学習不要）
+
+学習済みモデル（`.pt`）があれば、評価スクリプトだけ再実行すれば重要度を取得できる。
+学習はスキップされ（`.pt` が既にあるため）、評価のみ再実行される。
+
+```bash
+# 既存の outputs/main32_mce_ep150 に対して重要度だけ取得
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce_ep150 0 true \
+    > logs/main32_mce_importance.log 2>&1 &
+```
+
+> ℹ️ `run_mce_irl_variant_single.sh` は学習済み `.pt` が存在すれば学習をスキップし、
+> 評価のみ再実行する。そのため既存モデルからの重要度取得は `--save-importance` を
+> 付けて同じパイプラインを再実行するだけでよい。
+
 固定値: `TRAIN_START=2019-01-01`, `TRAIN_END=2022-01-01`, `EVAL_CUTOFF=2023-01-01`,
-`EPOCHS=50`, `PATIENCE=5`, 評価は `--calibrate --n-jobs 4` で並列。
+`EPOCHS=150`, `PATIENCE=5`, 評価は `--calibrate --n-jobs 8` で並列。
 
 学習スクリプトには `--skip-threshold` を常時付与している（訓練データ上の F1 最適閾値計算は
 46928 軌跡の逐次推論で 1 時間以上かかり、かつメイン評価指標 AUC/Spearman は閾値非依存・
