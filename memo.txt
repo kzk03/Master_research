@@ -15,4 +15,3 @@ rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/Master_resear
 
 
 rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
-
