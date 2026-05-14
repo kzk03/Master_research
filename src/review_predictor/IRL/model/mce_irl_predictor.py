@@ -972,8 +972,9 @@ class MCEIRLSystem(RetentionIRLSystem):
 
 
 if __name__ == "__main__":
+    from review_predictor.IRL.features.common_features import STATE_FEATURES_WITH_PATH
     cfg = {
-        "state_dim": 23,
+        "state_dim": len(STATE_FEATURES_WITH_PATH),
         "action_dim": len(ACTION_FEATURES),
         "hidden_dim": 128,
         "dropout": 0.1,

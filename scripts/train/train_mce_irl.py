@@ -1254,11 +1254,19 @@ def main():
                     f"  → イベント単位で学習する場合は train_mce_event_irl.py を使用してください。"
                 )
             # state_dim をキャッシュ内容から推定して args との不整合を検出する
-            # (path_features_per_step が空ならグローバル IRL = state_dim 20、
-            #  存在すれば directory-level = state_dim 23)
+            # (path_features_per_step が空ならグローバル IRL、存在すれば directory-level)
+            # 特徴量定義の改訂で state_dim は変動するため STATE_FEATURES / STATE_FEATURES_WITH_PATH の長さを使う
+            from review_predictor.IRL.features.common_features import (
+                STATE_FEATURES,
+                STATE_FEATURES_WITH_PATH,
+            )
             has_path_features = bool(sample.get("path_features_per_step"))
-            inferred_state_dim = 23 if has_path_features else 20
-            expected_state_dim = 23 if args.directory_level else 20
+            inferred_state_dim = (
+                len(STATE_FEATURES_WITH_PATH) if has_path_features else len(STATE_FEATURES)
+            )
+            expected_state_dim = (
+                len(STATE_FEATURES_WITH_PATH) if args.directory_level else len(STATE_FEATURES)
+            )
             if inferred_state_dim != expected_state_dim:
                 raise ValueError(
                     f"キャッシュ {cache_path} は state_dim={inferred_state_dim} 用ですが、"
@@ -1308,7 +1316,8 @@ def main():
                 traj["step_actions"] = [
                     int(bool(l)) for l in traj.get("step_labels", [])
                 ]
-            state_dim = 23  # 20 + path(3)
+            from review_predictor.IRL.features.common_features import STATE_FEATURES_WITH_PATH
+            state_dim = len(STATE_FEATURES_WITH_PATH)  # state + path
 
             # キャッシュ保存
             if cache_path:
@@ -1328,7 +1337,8 @@ def main():
                 project=args.project,
                 negative_oversample_factor=args.negative_oversample_factor
             )
-            state_dim = 20  # v2: STATE_FEATURES(20) + ACTION_FEATURES(5)
+            from review_predictor.IRL.features.common_features import STATE_FEATURES
+            state_dim = len(STATE_FEATURES)  # v2: state のみ (path なし)
 
         if not train_trajectories:
             logger.error("訓練用軌跡が抽出できませんでした")
