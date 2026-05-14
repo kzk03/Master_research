@@ -55,9 +55,7 @@ nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
     bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce 0 > logs/main32_mce.log 2>&1 &
 
 # 特徴量重要度も保存する場合 (第4引数に true)
-nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
-    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce 0 true > logs/main32_mce.log 2>&1 &
-
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce_v3_feat26 0 true > logs/main32_mce_v3_feat26.log 2>&1 &
 # ログの確認
 tail -f logs/main32_mce.log
 ```
