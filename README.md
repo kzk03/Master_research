@@ -63,6 +63,74 @@ tail -f logs/main32_mce.log
 デフォルトで variant 0 (LSTM) のみ実行。LSTM+Attention / Transformer はスクリプト末尾で
 コメントアウトしてあるので必要時に復元する。詳細は下の Step 1〜7。
 
+### 特徴量改修 v2 — Phase 1 (2026-05-14)
+
+IRL_Dir が RF_Dir に AUC で -0.01〜-0.07 負けている状況を打破するため、`STATE_FEATURES` /
+`PATH_FEATURE_NAMES` に **計 5 つ** の特徴量を追加 (`src/review_predictor/IRL/features/`)。
+
+| 軸 | 追加 | 出典 / 根拠 |
+|---|---|---|
+| state | `n_projects` | Vasilescu CHI 2015 / 自前 finding A-2 (3+プロジェクト参加で IRL +0.019) |
+| state | `cross_project_review_share` | Vasilescu CHI 2015 |
+| state | `same_domain_share` | Baysal EMSE 2016 (organization affiliation) |
+| path | `path_lcp_similarity` | Thongtanunam SANER 2015 (REVFINDER) |
+| path | `path_owner_overlap` | Casalnuovo FSE 2015 (tie strength, Jaccard) |
+
+設計方針: **LSTM が累積系列から暗黙学習可能な「差分系」(delta, burst, WRC) は追加しない**。
+WRC (Hannebauer ASE 2016) は当初検討したが、smoke test で任意の half-life で既存 count 系
+特徴量 (`total_reviews` / `recent_activity_frequency`) と r ≥ 0.89 の高相関を確認したため除外。
+
+最終次元: state 18→**21**, path 3→**5** (with path 計 26→**31**)。
+
+#### サーバ実行 (v2 で再学習・再評価)
+
+旧 26 次元の軌跡キャッシュは `outputs/mce_irl_trajectory_cache/main32/` に残したまま、
+**`CACHE_TAG` を上書きして別ディレクトリに新キャッシュを生成**する。
+RF / RF_Dir は eval スクリプト内で都度学習されるので新特徴量が自動的に反映される。
+
+```bash
+# 0) 最新コードを取得
+git pull
+
+# 1) パイプライン実行 (新 CACHE_TAG + 新 outbase で旧結果と並列保持)
+#    - 軌跡再生成 (~1-2h, CPU)  → outputs/mce_irl_trajectory_cache/main32_v2_phase1/
+#    - MCE-IRL 4 窓学習 (~3-4h, GPU)
+#    - 評価 10 パターン (~30min)
+mkdir -p logs
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    CACHE_TAG=main32_v2_phase1 \
+    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce_v2_phase1 0 true \
+    > logs/main32_mce_v2_phase1.log 2>&1 &
+
+# 2) ログ追跡
+tail -f logs/main32_mce_v2_phase1.log
+```
+
+第 4 引数 `true` は feature importance も保存する指定 (新 5 特徴量が IRL でどれだけ
+重み付けされているかの分析用)。`CACHE_TAG=main32_v2_phase1` 指定により旧 cache
+(`outputs/mce_irl_trajectory_cache/main32/`) は触らず、新 cache を
+`outputs/mce_irl_trajectory_cache/main32_v2_phase1/` に作る。
+
+#### 完了後の AUC 比較
+
+```bash
+# v1 (旧 26次元) と v2 (新 31次元) の summary_metrics.json を並べる
+for win in 0-3m 3-6m 6-9m 9-12m; do
+  for ew in 0-3m 3-6m 6-9m 9-12m; do
+    [ "$win" \> "$ew" ] && continue
+    v1="outputs/main32_mce_ep150/lstm_baseline/train_${win}/eval_${ew}/summary_metrics.json"
+    v2="outputs/main32_mce_v2_phase1/lstm_baseline/train_${win}/eval_${ew}/summary_metrics.json"
+    [ -f "$v1" ] && [ -f "$v2" ] && python3 -c "
+import json
+v1 = json.load(open('$v1'))['IRL_Dir']['clf_auc_roc']
+v2 = json.load(open('$v2'))['IRL_Dir']['clf_auc_roc']
+rf = json.load(open('$v2'))['RF_Dir']['clf_auc_roc']
+print(f'train=${win} eval=${ew}: v1={v1:.4f} v2={v2:.4f} (Δ={v2-v1:+.4f}) vs RF_Dir={rf:.4f} (gap={v2-rf:+.4f})')
+"
+  done
+done
+```
+
 ### Step 1. Gerrit データ収集
 
 `scripts/pipeline/collect_service_teams.sh` が `data/service_teams_repos.csv` (245 repos) を読み、
