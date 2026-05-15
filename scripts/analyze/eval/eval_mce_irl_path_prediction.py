@@ -637,6 +637,14 @@ def parse_args() -> argparse.Namespace:
         default=0.3,
         help="校正フィットに使う (dev, dir) ペアの割合（残りで評価）",
     )
+    # Phase 2 (2026-05-15): co-change graph 由来の path 特徴量
+    # 評価時の PathFeatureExtractor 構築に渡す。指定が無ければ 0.0 (後方互換)。
+    p.add_argument(
+        "--hub-scores", type=str, default=None,
+        help="experiments/dependency_analysis/results/hub_scores_main32.csv")
+    p.add_argument(
+        "--cochange-neighbors", type=str, default=None,
+        help="experiments/dependency_analysis/results/cochange_neighbors_main32.csv")
     return p.parse_args()
 
 
@@ -1233,7 +1241,12 @@ def main() -> None:
     df = attach_dirs_to_df(df, cdm)
 
     # PathFeatureExtractor
-    path_extractor = PathFeatureExtractor(df, window_days=args.path_window_days)
+    path_extractor = PathFeatureExtractor(
+        df,
+        window_days=args.path_window_days,
+        hub_scores_path=args.hub_scores,
+        cochange_neighbors_path=args.cochange_neighbors,
+    )
 
     # BatchContinuationPredictor
     prediction_time = datetime.fromisoformat(args.prediction_time)

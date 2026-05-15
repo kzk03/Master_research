@@ -1201,6 +1201,15 @@ def main():
              " 閾値は 46928 軌跡の逐次推論で 1 時間以上かかるため、AUC/Spearman ベース"
              " 評価しか使わない場合は不要。"
     )
+    # Phase 2 (2026-05-15): co-change graph 由来の path 特徴量用 CSV
+    # 軌跡キャッシュを使わず内部抽出する場合のみ effective。
+    # キャッシュ経由なら extract_mce_trajectories.py 側に渡してください。
+    parser.add_argument(
+        "--hub-scores", type=str, default=None,
+        help="experiments/dependency_analysis/results/hub_scores_main32.csv")
+    parser.add_argument(
+        "--cochange-neighbors", type=str, default=None,
+        help="experiments/dependency_analysis/results/cochange_neighbors_main32.csv")
     args = parser.parse_args()
     
     # 出力ディレクトリを作成
@@ -1295,7 +1304,12 @@ def main():
                 'reviewer_email': 'email',
                 'request_time': 'timestamp',
             })
-            path_extractor = PathFeatureExtractor(df_for_path, window_days=180)
+            path_extractor = PathFeatureExtractor(
+                df_for_path,
+                window_days=180,
+                hub_scores_path=args.hub_scores,
+                cochange_neighbors_path=args.cochange_neighbors,
+            )
 
             from review_predictor.IRL.model.network_variants import is_multitask
             _multitask = is_multitask(args.model_type)

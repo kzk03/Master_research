@@ -1,18 +1,24 @@
 """
-2026-05-14 追加の 5 特徴量（state 3 + path 2）の動作確認テスト。
+2026-05-14〜15 追加の特徴量の動作確認テスト。
 
-state side:
+state side (Phase 1, 3 features):
   - n_projects
   - cross_project_review_share
   - same_domain_share
 
-path side:
-  - path_lcp_similarity
+path side (Phase 1, 1 feature):
   - path_owner_overlap
 
-注: WRC (weighted_review_count_wrc) も当初検討したが、smoke test で任意の
-half-life で既存 count 系特徴量 (total_reviews / recent_30d_count) と
-r ≥ 0.89 の高相関を確認したため、LSTM の表現力と冗長との判断で除外。
+path side (Phase 2, 2 features):
+  - path_hub_score
+  - path_neighbor_coverage
+
+注:
+- WRC (weighted_review_count_wrc) も当初検討したが、smoke test で任意の
+  half-life で既存 count 系特徴量 (total_reviews / recent_30d_count) と
+  r ≥ 0.89 の高相関を確認したため、LSTM の表現力と冗長との判断で除外。
+- path_lcp_similarity (REVFINDER 式) は v2_phase1 で RF importance=0.000
+  と完全 dead だったため 2026-05-15 に削除。
 """
 from __future__ import annotations
 
@@ -33,7 +39,6 @@ from review_predictor.IRL.features.path_features import (
     PATH_FEATURE_DIM,
     PATH_FEATURE_NAMES,
     PathFeatureExtractor,
-    _lcp_score,
     attach_dirs_to_df,
 )
 
@@ -181,24 +186,7 @@ def test_default_features_complete():
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# path side: _lcp_score
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-
-@pytest.mark.parametrize("a,b,expected", [
-    ("nova/compute", "nova/compute",     1.0),
-    ("nova/compute", "nova/network",     0.5),
-    ("nova/compute", "neutron/agent",    0.0),
-    ("nova/compute/api", "nova/compute", 2 / 3),
-    ("", "x", 0.0),
-    ("x", "", 0.0),
-])
-def test_lcp_score(a, b, expected):
-    assert math.isclose(_lcp_score(a, b), expected, abs_tol=1e-6)
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# path side: PathFeatureExtractor.compute returns 5 dims
+# path side: PathFeatureExtractor.compute returns 6 dims
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
@@ -239,7 +227,7 @@ def _build_path_df():
     return df
 
 
-def test_compute_returns_five_dims():
+def test_compute_returns_six_dims():
     df = _build_path_df()
     ext = PathFeatureExtractor(df, window_days=30)
     vec = ext.compute(
@@ -247,26 +235,13 @@ def test_compute_returns_five_dims():
         task_dirs=frozenset({"nova/compute"}),
         current_time=datetime(2024, 6, 30),
     )
-    assert vec.shape == (5,)
+    assert vec.shape == (6,)
     assert vec.dtype == np.float32
-    assert PATH_FEATURE_DIM == 5
+    assert PATH_FEATURE_DIM == 6
     assert np.all(np.isfinite(vec))
-
-
-def test_lcp_similarity_recognizes_related_dir():
-    """task_dir=nova/db (alice は触っていない) でも nova/compute, nova/network があるので
-    LCP は 1/2 = 0.5 程度."""
-    df = _build_path_df()
-    ext = PathFeatureExtractor(df, window_days=30)
-    vec = ext.compute(
-        developer_id="alice@x.com",
-        task_dirs=frozenset({"nova/db"}),
-        current_time=datetime(2024, 6, 30),
-    )
-    # vec[3] = path_lcp_similarity
-    assert vec[3] == pytest.approx(0.5, abs=1e-3)
-    # path_review_count は 0
-    assert vec[0] == 0.0
+    # hub_score / coverage が未指定なので 0.0
+    assert vec[4] == 0.0  # path_hub_score
+    assert vec[5] == 0.0  # path_neighbor_coverage
 
 
 def test_owner_overlap_jaccard():
@@ -279,8 +254,8 @@ def test_owner_overlap_jaccard():
         task_dirs=frozenset({"nova/compute"}),
         current_time=datetime(2024, 6, 30),
     )
-    # vec[4] = path_owner_overlap (rev_owners={ham,jane}, td_owners={ham}, union=2, inter=1)
-    assert vec[4] == pytest.approx(0.5, abs=1e-3)
+    # vec[3] = path_owner_overlap (rev_owners={ham,jane}, td_owners={ham}, union=2, inter=1)
+    assert vec[3] == pytest.approx(0.5, abs=1e-3)
 
 
 def test_empty_task_dirs_returns_zero():
@@ -291,10 +266,166 @@ def test_empty_task_dirs_returns_zero():
         task_dirs=None,
         current_time=datetime(2024, 6, 30),
     )
-    assert vec.shape == (5,)
+    assert vec.shape == (6,)
     assert np.all(vec == 0.0)
 
 
 def test_path_feature_names_count():
-    assert len(PATH_FEATURE_NAMES) == 5
-    assert PATH_FEATURE_NAMES[-2:] == ["path_lcp_similarity", "path_owner_overlap"]
+    assert len(PATH_FEATURE_NAMES) == 6
+    assert PATH_FEATURE_NAMES[3] == "path_owner_overlap"
+    assert PATH_FEATURE_NAMES[4:] == ["path_hub_score", "path_neighbor_coverage"]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Phase 2: hub_score & neighbor_coverage
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+def _write_hub_csv(tmp_path, rows):
+    """rows = [(project, directory, hub_score, change_count), ...]"""
+    p = tmp_path / "hub_scores.csv"
+    df = pd.DataFrame(rows, columns=["project", "directory", "hub_score", "change_count"])
+    df.to_csv(p, index=False)
+    return p
+
+
+def _write_neighbors_csv(tmp_path, rows):
+    """rows = [(project, directory, neighbor, weight), ...]
+    両方向 (d1->d2, d2->d1) を呼び出し側で渡すこと。
+    """
+    p = tmp_path / "cochange_neighbors.csv"
+    df = pd.DataFrame(rows, columns=["project", "directory", "neighbor", "weight"])
+    df.to_csv(p, index=False)
+    return p
+
+
+def test_hub_score_loaded_and_max_normalized(tmp_path):
+    """hub_scores CSV を読み込み、task_dirs の max を 64 で正規化して返す。"""
+    df = _build_path_df()
+    hub = _write_hub_csv(tmp_path, [
+        ("openstack/nova", "nova/compute", 32, 100),
+        ("openstack/nova", "nova/network",  16,  50),
+        ("openstack/other", "other/x",       8,  10),
+    ])
+    ext = PathFeatureExtractor(df, window_days=30, hub_scores_path=hub)
+    vec = ext.compute(
+        developer_id="alice@x.com",
+        task_dirs=frozenset({"nova/compute", "nova/network"}),
+        current_time=datetime(2024, 6, 30),
+    )
+    # max(32, 16) / 64 = 0.5
+    assert vec[4] == pytest.approx(0.5, abs=1e-4)
+
+
+def test_hub_score_unknown_dir_returns_zero(tmp_path):
+    df = _build_path_df()
+    hub = _write_hub_csv(tmp_path, [("openstack/nova", "nova/compute", 32, 100)])
+    ext = PathFeatureExtractor(df, window_days=30, hub_scores_path=hub)
+    vec = ext.compute(
+        developer_id="alice@x.com",
+        task_dirs=frozenset({"unknown/dir"}),
+        current_time=datetime(2024, 6, 30),
+    )
+    assert vec[4] == 0.0
+
+
+def test_neighbor_coverage_intersection(tmp_path):
+    """alice の touched dirs = {nova/compute, nova/network}.
+    target=nova/compute の co-change 近傍 = {nova/db, nova/network}.
+    intersect = {nova/network}, denom = 2 (nova/db, nova/network).
+    coverage = 1/2 = 0.5."""
+    df = _build_path_df()
+    neigh = _write_neighbors_csv(tmp_path, [
+        ("openstack/nova", "nova/compute", "nova/db",      5),
+        ("openstack/nova", "nova/db",      "nova/compute", 5),
+        ("openstack/nova", "nova/compute", "nova/network", 3),
+        ("openstack/nova", "nova/network", "nova/compute", 3),
+    ])
+    ext = PathFeatureExtractor(df, window_days=30, cochange_neighbors_path=neigh)
+    vec = ext.compute(
+        developer_id="alice@x.com",
+        task_dirs=frozenset({"nova/compute"}),
+        current_time=datetime(2024, 6, 30),
+    )
+    # alice の reviewer_dirs = {nova/compute, nova/network}
+    # target=nova/compute の近傍 = {nova/db, nova/network}
+    # target_dirs を近傍から除外 (自己排除) → {nova/db, nova/network}
+    # 交差 = {nova/network} → coverage = 1/2
+    assert vec[5] == pytest.approx(0.5, abs=1e-4)
+
+
+def test_neighbor_coverage_no_neighbors_returns_zero(tmp_path):
+    df = _build_path_df()
+    # target dir has no neighbors in the table
+    neigh = _write_neighbors_csv(tmp_path, [
+        ("openstack/nova", "nova/other", "nova/x", 5),
+        ("openstack/nova", "nova/x",     "nova/other", 5),
+    ])
+    ext = PathFeatureExtractor(df, window_days=30, cochange_neighbors_path=neigh)
+    vec = ext.compute(
+        developer_id="alice@x.com",
+        task_dirs=frozenset({"nova/compute"}),  # 近傍なし
+        current_time=datetime(2024, 6, 30),
+    )
+    assert vec[5] == 0.0
+
+
+def test_path_features_backward_compat_no_graph():
+    """hub_scores / cochange_neighbors を指定しなければ新 2 特徴量は 0.0、
+    既存呼び出しサイトは壊れない。"""
+    df = _build_path_df()
+    ext = PathFeatureExtractor(df, window_days=30)  # 旧シグネチャ
+    vec = ext.compute(
+        developer_id="alice@x.com",
+        task_dirs=frozenset({"nova/compute"}),
+        current_time=datetime(2024, 6, 30),
+    )
+    assert vec.shape == (6,)
+    assert vec[4] == 0.0  # hub_score 未ロード
+    assert vec[5] == 0.0  # neighbor_coverage 未ロード
+
+
+def test_hub_and_coverage_combined(tmp_path):
+    """両方読み込み + 両方の値が独立に取れることを確認。"""
+    df = _build_path_df()
+    hub = _write_hub_csv(tmp_path, [
+        ("openstack/nova", "nova/compute", 16, 100),
+        ("openstack/nova", "nova/db",       8,  50),
+        ("openstack/nova", "nova/network",  4,  20),
+    ])
+    neigh = _write_neighbors_csv(tmp_path, [
+        ("openstack/nova", "nova/compute", "nova/db",      5),
+        ("openstack/nova", "nova/db",      "nova/compute", 5),
+        ("openstack/nova", "nova/compute", "nova/network", 3),
+        ("openstack/nova", "nova/network", "nova/compute", 3),
+    ])
+    ext = PathFeatureExtractor(
+        df, window_days=30,
+        hub_scores_path=hub, cochange_neighbors_path=neigh,
+    )
+    vec = ext.compute(
+        developer_id="alice@x.com",
+        task_dirs=frozenset({"nova/compute"}),
+        current_time=datetime(2024, 6, 30),
+    )
+    # hub: 16 / 64 = 0.25
+    assert vec[4] == pytest.approx(0.25, abs=1e-4)
+    # coverage: 1/2 (alice の nova/network ⊂ 近傍 {nova/db, nova/network})
+    assert vec[5] == pytest.approx(0.5, abs=1e-4)
+
+
+def test_missing_csv_path_is_safe(tmp_path):
+    """指定した CSV が存在しない場合、警告を出して 0.0 を返す (例外を投げない)."""
+    df = _build_path_df()
+    fake = tmp_path / "nonexistent.csv"
+    ext = PathFeatureExtractor(
+        df, window_days=30,
+        hub_scores_path=fake, cochange_neighbors_path=fake,
+    )
+    vec = ext.compute(
+        developer_id="alice@x.com",
+        task_dirs=frozenset({"nova/compute"}),
+        current_time=datetime(2024, 6, 30),
+    )
+    assert vec[4] == 0.0
+    assert vec[5] == 0.0

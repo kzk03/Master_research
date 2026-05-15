@@ -85,6 +85,20 @@ CACHE_TAG="${CACHE_TAG:-default}"
 CACHE_DIR="outputs/mce_irl_trajectory_cache/${CACHE_TAG}"
 mkdir -p "$CACHE_DIR"
 
+# Phase 2 (2026-05-15): co-change graph 由来の path 特徴量 CSV
+#   HUB_SCORES_CSV / COCHANGE_NEIGHBORS_CSV を env で渡すと extract と eval に
+#   --hub-scores / --cochange-neighbors を付与する。未指定なら従来通り (新 2 特徴量 0.0)。
+EXTRA_PATH_FEAT_ARGS=()
+if [ -n "${HUB_SCORES_CSV:-}" ] && [ -f "$HUB_SCORES_CSV" ]; then
+    EXTRA_PATH_FEAT_ARGS+=(--hub-scores "$HUB_SCORES_CSV")
+fi
+if [ -n "${COCHANGE_NEIGHBORS_CSV:-}" ] && [ -f "$COCHANGE_NEIGHBORS_CSV" ]; then
+    EXTRA_PATH_FEAT_ARGS+=(--cochange-neighbors "$COCHANGE_NEIGHBORS_CSV")
+fi
+if [ "${#EXTRA_PATH_FEAT_ARGS[@]}" -gt 0 ]; then
+    echo "[Phase 2] path-feature CSVs: ${EXTRA_PATH_FEAT_ARGS[*]}"
+fi
+
 # warm-start 設定 (環境変数で制御):
 #   INIT_FROM_BASE=outputs/variant_comparison_server/$VNAME を指定すると、
 #   各窓で $INIT_FROM_BASE/train_${win}m/irl_model.pt から重みを load して
@@ -126,6 +140,7 @@ run_eval() {
         --n-jobs 4 \
         --output-dir "$eval_dir" \
         --calibrate \
+        "${EXTRA_PATH_FEAT_ARGS[@]}" \
         $importance_flag
     echo "[MCE-IRL $VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
 }
@@ -161,7 +176,8 @@ for i in 0 1 2 3; do
             --future-window-start "$fs" \
             --future-window-end "$fe" \
             --n-jobs -1 \
-            --output "$cache_path"
+            --output "$cache_path" \
+            "${EXTRA_PATH_FEAT_ARGS[@]}"
         echo "[MCE-IRL cache ${win}m] 抽出完了 → $cache_path"
     fi
 done
