@@ -4,7 +4,7 @@
 
 # Local → Server
 
-rsync -avz --exclude='.git/' --exclude='*.pkl' --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/Master_research_v2/
+rsync -avz --exclude='.git/' --exclude='*.pkl' --exclude='data/service_teams_repos.csv' --exclude='outputs/' --exclude='logs/' --exclude='.venv' --exclude='experiments/' --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/test/
 
 rsync -avz --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/Master_research_v2/
 
