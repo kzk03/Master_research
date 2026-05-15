@@ -111,7 +111,9 @@ echo ""
 
 # variant スクリプトに環境変数で渡す
 # CACHE_TAG: 軌跡キャッシュを scope ごとに分離するためのキー (TAG をそのまま使う)
-export REVIEWS RAW_JSON_LIST_FILE="$RAW_JSON_LIST" CACHE_TAG="$TAG"
+#            外部から CACHE_TAG を export しておけばそちらが優先される (特徴量定義を
+#            変えたときに旧キャッシュを残しつつ新キャッシュを別ディレクトリに作る用)。
+export REVIEWS RAW_JSON_LIST_FILE="$RAW_JSON_LIST" CACHE_TAG="${CACHE_TAG:-$TAG}"
 
 # ── variant 0: LSTM (デフォルト、基本これだけ) ──
 bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline "$OUTBASE" "$GPU_ID" "$SAVE_IMPORTANCE"

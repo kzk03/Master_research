@@ -11,11 +11,20 @@
 現在タスクとの「親和度」を表現できる。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-■ 特徴量 (3 次元)
+■ 特徴量 (5 次元)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  path_review_count    : 該当ディレクトリでの過去レビュー件数 (log正規化)
-  path_recency         : 該当ディレクトリを最後に触ってからの新しさ (0-1)
-  path_acceptance_rate : 該当ディレクトリでの過去承諾率
+  path_review_count     : 該当ディレクトリでの過去レビュー件数 (log正規化)
+  path_recency          : 該当ディレクトリを最後に触ってからの新しさ (0-1)
+  path_acceptance_rate  : 該当ディレクトリでの過去承諾率
+  path_lcp_similarity   : task path と reviewer の過去 dir 集合との LCP 類似度
+                          (REVFINDER 式; Thongtanunam SANER 2015)
+  path_owner_overlap    : task dir の過去 owner 集合 ∩ reviewer の collaborator 集合 (Jaccard)
+                          (Casalnuovo FSE 2015 の tie strength 系)
+
+■ 2026-05-14 追加 (IRL vs RF AUC ギャップ解消)
+  LSTM が累積系列から作れない「path 文字列類似度」と「グラフ重複」を追加。
+  累積カウントの差分系（直近 90d レビュー数等）は LSTM のゲーティングで暗黙学習
+  できるため意図的に追加しない。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ■ データソース
@@ -51,6 +60,8 @@ PATH_FEATURE_NAMES: List[str] = [
     "path_review_count",
     "path_recency",
     "path_acceptance_rate",
+    "path_lcp_similarity",   # 2026-05-14 追加 (REVFINDER 式)
+    "path_owner_overlap",    # 2026-05-14 追加 (Jaccard, Casalnuovo 系)
 ]
 
 #: path features の次元数
@@ -58,6 +69,35 @@ PATH_FEATURE_DIM: int = len(PATH_FEATURE_NAMES)
 
 #: log 正規化の上限（review count 100 件で 1.0）
 _REVIEW_COUNT_LOG_CAP: float = math.log1p(100.0)
+
+
+def _lcp_score(path_a: str, path_b: str) -> float:
+    """
+    2 ディレクトリパスの Longest Common Prefix を component 単位で測り、
+    max(深さ) で正規化した類似度を返す (0.0〜1.0)。
+
+    REVFINDER (Thongtanunam SANER 2015) の LCP score を component 単位に
+    適合させたもの。ファイルパスではなくディレクトリ (例: "nova/compute") を
+    対象にするので、文字単位ではなく "/" で split したセグメント単位で一致を測る。
+
+    例:
+        _lcp_score("nova/compute", "nova/compute")        -> 1.0
+        _lcp_score("nova/compute", "nova/network")        -> 0.5  (1/2)
+        _lcp_score("nova/compute", "neutron/agent")       -> 0.0
+        _lcp_score("nova/compute/api", "nova/compute")    -> 0.667 (2/3)
+    """
+    if not path_a or not path_b:
+        return 0.0
+    parts_a = path_a.split("/")
+    parts_b = path_b.split("/")
+    common = 0
+    for pa, pb in zip(parts_a, parts_b):
+        if pa == pb:
+            common += 1
+        else:
+            break
+    max_len = max(len(parts_a), len(parts_b))
+    return common / max_len if max_len else 0.0
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -247,17 +287,20 @@ class PathFeatureExtractor:
         current_time: datetime,
     ) -> np.ndarray:
         """
-        1 人の開発者について path features (3 次元) を計算する。
+        1 人の開発者について path features (5 次元) を計算する。
 
         task_dirs が空/None のときは全次元 0.0 を返す
         (= そのタスクにディレクトリ情報が無い場合のフォールバック)。
+
+        返り値の順序は `PATH_FEATURE_NAMES`:
+            [review_count, recency, acceptance, lcp_similarity, owner_overlap]
         """
         if not task_dirs:
             return np.zeros(PATH_FEATURE_DIM, dtype=np.float32)
 
         start = current_time - timedelta(days=self.window_days)
 
-        # 開発者 × ウィンドウ内の行だけに絞り込む
+        # 開発者 × ウィンドウ内の全行 (LCP / owner_overlap で使う、task_dirs に絞らない)
         mask = (
             (self.df["email"] == developer_id)
             & (self.df["timestamp"] >= start)
@@ -267,32 +310,99 @@ class PathFeatureExtractor:
         if sub.empty:
             return np.zeros(PATH_FEATURE_DIM, dtype=np.float32)
 
-        # task_dirs と交差するレビューだけを残す
+        # task_dirs と交差するレビューだけを残す（既存 3 特徴量用）
         dirs_series = sub[self.dirs_column]
         overlap_mask = dirs_series.map(
             lambda ds: bool(ds) and not ds.isdisjoint(task_dirs)
         )
         hits = sub.loc[overlap_mask]
+
+        # ── 既存 3 特徴量 (hits 基準) ────────────────────────────────────
         if hits.empty:
-            return np.zeros(PATH_FEATURE_DIM, dtype=np.float32)
-
-        # 1) review count (log 正規化)
-        review_count = float(len(hits))
-        review_count_norm = min(math.log1p(review_count) / _REVIEW_COUNT_LOG_CAP, 1.0)
-
-        # 2) recency: 最終タッチ日からの新しさ
-        last_ts = hits["timestamp"].max()
-        days_since = (current_time - last_ts.to_pydatetime()).total_seconds() / 86400.0
-        recency = max(0.0, 1.0 - min(days_since / self.window_days, 1.0))
-
-        # 3) acceptance rate (label 列が 0/1 前提)
-        if "label" in hits.columns and len(hits) > 0:
-            acceptance = float(hits["label"].mean())
+            review_count_norm = 0.0
+            recency = 0.0
+            acceptance = 0.5  # 中立値
         else:
-            acceptance = 0.5
+            # 1) review count (log 正規化)
+            review_count = float(len(hits))
+            review_count_norm = min(
+                math.log1p(review_count) / _REVIEW_COUNT_LOG_CAP, 1.0
+            )
+
+            # 2) recency: 最終タッチ日からの新しさ
+            last_ts = hits["timestamp"].max()
+            days_since = (
+                current_time - last_ts.to_pydatetime()
+            ).total_seconds() / 86400.0
+            recency = max(0.0, 1.0 - min(days_since / self.window_days, 1.0))
+
+            # 3) acceptance rate (label 列が 0/1 前提)
+            if "label" in hits.columns:
+                acceptance = float(hits["label"].mean())
+            else:
+                acceptance = 0.5
+
+        # ── 新規 4) LCP similarity (sub 基準: reviewer の全 dir 集合) ─────────
+        # task_dirs ∋ td に対し、reviewer の過去 dir 集合との最大 LCP を平均。
+        # 「過去に近接ディレクトリを触っているか」を path 文字列だけで測る REVFINDER 式。
+        reviewer_dirs: Set[str] = set()
+        for ds in sub[self.dirs_column]:
+            if ds:
+                reviewer_dirs.update(ds)
+        if reviewer_dirs:
+            lcp_scores: List[float] = []
+            for td in task_dirs:
+                best = 0.0
+                for rd in reviewer_dirs:
+                    s = _lcp_score(td, rd)
+                    if s > best:
+                        best = s
+                        if best >= 1.0:
+                            break
+                lcp_scores.append(best)
+            path_lcp_similarity = (
+                float(np.mean(lcp_scores)) if lcp_scores else 0.0
+            )
+        else:
+            path_lcp_similarity = 0.0
+
+        # ── 新規 5) owner overlap (Jaccard) ──────────────────────────────
+        # task_dirs に過去 PR を出した owner 集合 ∩ reviewer の collaborator 集合 / 和集合
+        # 「該当 dir のオーナーコミュニティと reviewer の交流範囲がどれだけ重なるか」
+        if "owner_email" in sub.columns:
+            rev_owners: Set[str] = set(sub["owner_email"].dropna().unique())
+        else:
+            rev_owners = set()
+
+        if "owner_email" in self.df.columns and rev_owners:
+            window_mask = (
+                (self.df["timestamp"] >= start)
+                & (self.df["timestamp"] < current_time)
+            )
+            window_df = self.df.loc[window_mask]
+            td_overlap = window_df[self.dirs_column].map(
+                lambda ds: bool(ds) and not ds.isdisjoint(task_dirs)
+            )
+            td_owners: Set[str] = set(
+                window_df.loc[td_overlap, "owner_email"].dropna().unique()
+            )
+            union = rev_owners | td_owners
+            if union:
+                path_owner_overlap = len(rev_owners & td_owners) / len(union)
+            else:
+                path_owner_overlap = 0.0
+        else:
+            path_owner_overlap = 0.0
 
         return np.array(
-            [review_count_norm, recency, acceptance], dtype=np.float32
+            [
+                review_count_norm,
+                recency,
+                acceptance,
+                path_lcp_similarity,
+                path_owner_overlap,
+            ],
+            dtype=np.float32,
         )
 
     def compute_all(
