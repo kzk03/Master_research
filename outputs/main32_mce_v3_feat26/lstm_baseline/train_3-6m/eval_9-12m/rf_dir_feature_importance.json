@@ -1,0 +1,30 @@
+{
+  "feature_importance": {
+    "window_tenure_days": 0.015227212791105673,
+    "total_changes": 0.016880447260267294,
+    "total_reviews": 0.04698125235215845,
+    "recent_activity_frequency": 0.032840473520964315,
+    "avg_activity_gap": 0.0322891844371007,
+    "activity_trend": 0.02074489667387712,
+    "unique_collaborator_count": 0.030762759926504953,
+    "overall_acceptance_rate": 0.022691496447477203,
+    "recent_acceptance_rate": 0.012058670690358795,
+    "recent_load_ratio_30d_all": 0.020413300320353666,
+    "days_since_last_activity": 0.0324137808336107,
+    "reciprocity_score": 0.015533629069240343,
+    "recent_load_ratio_7d_30d": 0.008575057035808263,
+    "core_reviewer_ratio": 0.0444430703865398,
+    "acceptance_rate_last10": 0.011394508530958478,
+    "active_months_ratio": 0.023231227331839594,
+    "response_time_trend": 0.02443880103608004,
+    "reviewer_owner_ratio": 0.018544706048522767,
+    "path_review_count": 0.19982672285293862,
+    "path_recency": 0.1839644979058023,
+    "path_acceptance_rate": 0.06868889609013785,
+    "avg_action_intensity": 0.021218107438392968,
+    "avg_change_lines": 0.023207450268916262,
+    "avg_response_time": 0.03301984834300662,
+    "avg_review_size": 0.020672030344938582,
+    "repeat_collaboration_rate": 0.019937972063098656
+  }
+}

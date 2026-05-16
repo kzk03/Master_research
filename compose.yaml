@@ -1,7 +1,7 @@
 services:
   app:
-    container_name: irl_dir_v2
-    image: irl_dir_v2
+    container_name: two_tower
+    image: two_tower
     deploy:
       resources:
         limits:

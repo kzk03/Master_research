@@ -161,6 +161,55 @@ tail -f logs/main32_mce_v2_phase2.log
 軌跡キャッシュは `outputs/mce_irl_trajectory_cache/main32_v2_phase2/` に新規生成 (Phase 1 と並列保持)。
 co-change graph CSV はサーバ側にも `experiments/dependency_analysis/results/` に push 済みであることを前提とする (git pull で同期される)。
 
+### Two-tower アーキテクチャ — Phase 3 (2026-05-15)
+
+Phase 1/2 結果から、**「特徴量を増やしても RF も同じく拾うので相対優位が出ない」**
+(B-10 の構造問題) が確認された。Two-tower はこの問題に**特徴量ではなくアーキテクチャ**
+で対応する。
+
+#### 構造
+
+```
+state[..., :21] (state_only)  → state_encoder + LSTM → last_hidden
+state[..., 21:] (path 6 dim)  → path_encoder (LayerNorm+ReLU, 最終ステップ直結)
+                                       ↓
+                          concat → reward_predictor (2-unit head)
+```
+
+`MCEIRLNetworkLSTMTwoTower` (`src/review_predictor/IRL/model/mce_irl_predictor.py`)、
+**model_type=3** に登録。`path_dim` は `state_dim - len(STATE_FEATURES)` で自動推定
+(directory-level なら 6)、明示指定も可。
+
+#### 期待効果
+- RF の "path 系直接重み付け" 強みを IRL も獲得 (B-10 で IRL 17.6% → RF 47.8% の
+  importance 集中の差を解消する見込み)
+- LSTM の sequence 強み (state 系の時系列処理) は維持
+
+#### サーバ実行 (Two-tower + Phase 2 path 特徴量)
+
+`run_mce_pipeline.sh` ではデフォルト variant=0 なので、variant スクリプトを直接呼ぶ:
+
+```bash
+git pull
+
+# Filter + raw_json リストは既存 (main32) を再利用
+mkdir -p logs
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    CACHE_TAG=main32_v2_phase2 \
+    REVIEWS=data/combined_raw_main32.csv \
+    RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
+    HUB_SCORES_CSV=experiments/dependency_analysis/results/hub_scores_main32.csv \
+    COCHANGE_NEIGHBORS_CSV=experiments/dependency_analysis/results/cochange_neighbors_main32.csv \
+    bash scripts/variant/run_mce_irl_variant_single.sh 3 lstm_two_tower outputs/main32_mce_v2_phase3_tt 0 true \
+    > logs/main32_mce_v2_phase3_tt.log 2>&1 &
+
+tail -f logs/main32_mce_v2_phase3_tt.log
+```
+
+- 軌跡キャッシュは Phase 2 と同じ (`CACHE_TAG=main32_v2_phase2`) を再利用 (path features は同じ 6 dim)
+- outbase は別 (`outputs/main32_mce_v2_phase3_tt/`) で旧結果と並列保持
+- 4 番目の引数 `3` が variant_id (Two-tower), 5 番目 `lstm_two_tower` が出力ディレクトリ名
+
 #### 完了後の AUC 比較
 
 ```bash

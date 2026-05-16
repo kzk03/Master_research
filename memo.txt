@@ -6,6 +6,7 @@
 
 rsync -avz --exclude='.git/' --exclude='*.pkl' --exclude='data/service_teams_repos.csv' --exclude='outputs/' --exclude='logs/' --exclude='.venv' --exclude='experiments/' --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/test/
 
+rsync -avz --exclude='.git/' --exclude='*.pkl' --exclude='logs/' --exclude='.venv' --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/two_tower/
 
 
 rsync -avz --exclude='.git/' --exclude='*.pkl' --exclude='data/service_teams_repos.csv' --exclude='outputs/' --exclude='logs/' --exclude='.venv' --exclude='experiments/' --progress /Users/kazuki-h/Master_research/ socsel:/mnt/data1/kazuki-h/Master_research_v2/
@@ -18,6 +19,9 @@ rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
 
 rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/main32_mce_ep150/ /Users/kazuki-h/Master_research/outputs/main32_mce_ep150/
 
+rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/Master_research_v2/outputs/ /Users/kazuki-h/Master_research/outputs/
 rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/test/outputs/ /Users/kazuki-h/Master_research/outputs/
+
+rsync -avz --progress --exclude='*.pkl' socsel:/mnt/data1/kazuki-h/test/docs/ /Users/kazuki-h/Master_research/docs/
 
 rsync -avz socsel:/mnt/data1/kazuki-h/Master_research /Users/kazuki-h/
