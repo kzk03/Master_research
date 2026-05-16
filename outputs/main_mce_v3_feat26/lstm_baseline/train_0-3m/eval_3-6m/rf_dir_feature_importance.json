@@ -1,0 +1,30 @@
+{
+  "feature_importance": {
+    "window_tenure_days": 0.016385267422383304,
+    "total_changes": 0.014071775583801984,
+    "total_reviews": 0.03729072380368013,
+    "recent_activity_frequency": 0.02617588425198777,
+    "avg_activity_gap": 0.026506860349867,
+    "activity_trend": 0.020306600884127696,
+    "unique_collaborator_count": 0.013082520181514568,
+    "overall_acceptance_rate": 0.019393724863850482,
+    "recent_acceptance_rate": 0.01218438694265333,
+    "recent_load_ratio_30d_all": 0.022457876718411734,
+    "days_since_last_activity": 0.03484922461409023,
+    "reciprocity_score": 0.01697851053586965,
+    "recent_load_ratio_7d_30d": 0.010292674367650667,
+    "core_reviewer_ratio": 0.03849477491180592,
+    "acceptance_rate_last10": 0.012138968408537475,
+    "active_months_ratio": 0.019572432910061645,
+    "response_time_trend": 0.019385673253859977,
+    "reviewer_owner_ratio": 0.016047953072935453,
+    "path_review_count": 0.2035780236172952,
+    "path_recency": 0.2146571449940442,
+    "path_acceptance_rate": 0.08051947992739518,
+    "avg_action_intensity": 0.024636023647356273,
+    "avg_change_lines": 0.027818976142083274,
+    "avg_response_time": 0.02574584111215356,
+    "avg_review_size": 0.02324375500044965,
+    "repeat_collaboration_rate": 0.024184922482133803
+  }
+}

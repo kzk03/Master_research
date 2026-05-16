@@ -66,51 +66,55 @@ logger = logging.getLogger(__name__)
 
 
 # ── 親和度スコア ──────────────────────────────────────────────
+#
+# DEPRECATED (2026-05-15): グローバル IRL モデルは卒論時のメイン手法だが、
+# 修論では dir-level MCE-IRL に移行したため Variant A/B は使わない。
+# 復活させる場合は AFFINITY_WEIGHTS を 5 次元 (path_features 拡張に追従) に
+# する必要がある。
+#
+# # path features: [path_review_count, path_recency, path_acceptance_rate]
+# AFFINITY_WEIGHTS = np.array([0.5, 0.3, 0.2], dtype=np.float32)
+#
+#
+# def compute_affinity_score(path_features: np.ndarray) -> float:
+#     """path features (3-dim) を scalar affinity score に変換。"""
+#     return float(np.dot(path_features, AFFINITY_WEIGHTS))
 
-# path features: [path_review_count, path_recency, path_acceptance_rate]
-AFFINITY_WEIGHTS = np.array([0.5, 0.3, 0.2], dtype=np.float32)
 
-
-def compute_affinity_score(path_features: np.ndarray) -> float:
-    """path features (3-dim) を scalar affinity score に変換。"""
-    return float(np.dot(path_features, AFFINITY_WEIGHTS))
-
-
-# ── 予測関数 ──────────────────────────────────────────────────
-
-
-def predict_contributor_counts(
-    dir_developers: Dict[str, Set[str]],
-    continuation_probs: Dict[str, float],
-    path_extractor: PathFeatureExtractor,
-    prediction_time: datetime,
-) -> Tuple[Dict[str, float], Dict[str, float]]:
-    """
-    各ディレクトリについて Variant A / Variant B の予測貢献者数を算出。
-
-    Returns:
-        (variant_a, variant_b): {directory: predicted_count}
-    """
-    variant_a: Dict[str, float] = {}
-    variant_b: Dict[str, float] = {}
-
-    for dir_path, developers in dir_developers.items():
-        sum_a = 0.0
-        sum_b = 0.0
-        task_dirs = frozenset({dir_path})
-
-        for dev in developers:
-            prob = continuation_probs.get(dev, 0.5)
-            sum_a += prob
-
-            pf = path_extractor.compute(dev, task_dirs, prediction_time)
-            affinity = compute_affinity_score(pf)
-            sum_b += prob * affinity
-
-        variant_a[dir_path] = sum_a
-        variant_b[dir_path] = sum_b
-
-    return variant_a, variant_b
+# ── 予測関数 (DEPRECATED: グローバル IRL Variant A/B) ──────────
+#
+# def predict_contributor_counts(
+#     dir_developers: Dict[str, Set[str]],
+#     continuation_probs: Dict[str, float],
+#     path_extractor: PathFeatureExtractor,
+#     prediction_time: datetime,
+# ) -> Tuple[Dict[str, float], Dict[str, float]]:
+#     """
+#     各ディレクトリについて Variant A / Variant B の予測貢献者数を算出。
+#
+#     Returns:
+#         (variant_a, variant_b): {directory: predicted_count}
+#     """
+#     variant_a: Dict[str, float] = {}
+#     variant_b: Dict[str, float] = {}
+#
+#     for dir_path, developers in dir_developers.items():
+#         sum_a = 0.0
+#         sum_b = 0.0
+#         task_dirs = frozenset({dir_path})
+#
+#         for dev in developers:
+#             prob = continuation_probs.get(dev, 0.5)
+#             sum_a += prob
+#
+#             pf = path_extractor.compute(dev, task_dirs, prediction_time)
+#             affinity = compute_affinity_score(pf)
+#             sum_b += prob * affinity
+#
+#         variant_a[dir_path] = sum_a
+#         variant_b[dir_path] = sum_b
+#
+#     return variant_a, variant_b
 
 
 # ── ベースライン ──────────────────────────────────────────────
@@ -572,11 +576,12 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=["data/raw_json/openstack__nova.json"],
     )
-    p.add_argument(
-        "--irl-model",
-        type=Path,
-        default=Path("outputs/cross_temporal_v39/train_0-3m/irl_model.pt"),
-    )
+    # DEPRECATED (2026-05-15): グローバル IRL モデル引数。修論では使用しない。
+    # p.add_argument(
+    #     "--irl-model",
+    #     type=Path,
+    #     default=Path("outputs/cross_temporal_v39/train_0-3m/irl_model.pt"),
+    # )
     p.add_argument(
         "--irl-dir-model",
         type=Path,
@@ -632,7 +637,7 @@ def parse_args() -> argparse.Namespace:
 def evaluate_single_timepoint(
     df: pd.DataFrame,
     path_extractor: PathFeatureExtractor,
-    predictor: BatchContinuationPredictor,
+    predictor: Optional[BatchContinuationPredictor],  # DEPRECATED: 現在は常に None
     prediction_time: datetime,
     delta_months: int,
     window_days: int,
@@ -668,39 +673,41 @@ def evaluate_single_timepoint(
         all_devs.update(devs)
     logger.info(f"推論対象開発者数: {len(all_devs)}")
 
-    continuation_probs: Dict[str, float] = {}
-    variant_a: Dict[str, float] = {}
-    variant_b: Dict[str, float] = {}
-    if predictor is not None:
-        continuation_probs = predictor.predict_batch(
-            list(all_devs), prediction_time
-        )
-        # 3. IRL 予測 (Variant A / B)
-        variant_a, variant_b = predict_contributor_counts(
-            dir_developers, continuation_probs, path_extractor, prediction_time
-        )
-    else:
-        logger.info("グローバルIRLモデルなし: IRL_VariantA/B をスキップ")
-
-    # 3.5 スケーリング補正版 (Variant A-scaled)
-    # IRL の continuation_prob は絶対値が低い傾向があるため、
-    # 過去の実績（Naive）との比率で補正する
+    # DEPRECATED (2026-05-15): グローバル IRL の Variant A/B 計算ブロック。
+    # 卒論時の参考実装。修論では dir-level MCE-IRL を IRL_Dir 経由で評価する。
+    # continuation_probs: Dict[str, float] = {}
+    # variant_a: Dict[str, float] = {}
+    # variant_b: Dict[str, float] = {}
+    # if predictor is not None:
+    #     continuation_probs = predictor.predict_batch(
+    #         list(all_devs), prediction_time
+    #     )
+    #     # 3. IRL 予測 (Variant A / B)
+    #     variant_a, variant_b = predict_contributor_counts(
+    #         dir_developers, continuation_probs, path_extractor, prediction_time
+    #     )
+    # else:
+    #     logger.info("グローバルIRLモデルなし: IRL_VariantA/B をスキップ")
+    #
+    # # 3.5 スケーリング補正版 (Variant A-scaled)
+    # # IRL の continuation_prob は絶対値が低い傾向があるため、
+    # # 過去の実績（Naive）との比率で補正する
     naive_pred_raw = baseline_naive(df, prediction_time, window_days)
     naive_pred = {d: float(c) for d, c in naive_pred_raw.items()}
-
-    # Variant A-scaled: naive と共通のディレクトリで平均スケール比を計算
-    common_for_scale = set(variant_a.keys()) & set(naive_pred.keys())
-    if common_for_scale:
-        naive_vals = np.array([naive_pred[d] for d in common_for_scale])
-        irl_vals = np.array([variant_a[d] for d in common_for_scale])
-        # IRL の合計値 / Naive の合計値 の逆数がスケール係数
-        irl_sum = irl_vals.sum()
-        naive_sum = naive_vals.sum()
-        scale_factor = naive_sum / irl_sum if irl_sum > 0 else 1.0
-    else:
-        scale_factor = 1.0
-    variant_a_scaled = {d: v * scale_factor for d, v in variant_a.items()}
-    logger.info(f"スケール係数: {scale_factor:.2f}")
+    #
+    # # Variant A-scaled: naive と共通のディレクトリで平均スケール比を計算
+    # common_for_scale = set(variant_a.keys()) & set(naive_pred.keys())
+    # if common_for_scale:
+    #     naive_vals = np.array([naive_pred[d] for d in common_for_scale])
+    #     irl_vals = np.array([variant_a[d] for d in common_for_scale])
+    #     # IRL の合計値 / Naive の合計値 の逆数がスケール係数
+    #     irl_sum = irl_vals.sum()
+    #     naive_sum = naive_vals.sum()
+    #     scale_factor = naive_sum / irl_sum if irl_sum > 0 else 1.0
+    # else:
+    #     scale_factor = 1.0
+    # variant_a_scaled = {d: v * scale_factor for d, v in variant_a.items()}
+    # logger.info(f"スケール係数: {scale_factor:.2f}")
 
     # 4. ベースライン（Linear, RF）
     linear_pred = baseline_linear(df, prediction_time, delta_months)
@@ -728,7 +735,7 @@ def evaluate_single_timepoint(
         "Naive": naive_pred,
         "Linear": linear_pred,
         "RF": rf_pred,
-        # NOTE: グローバルIRLモデル未配線のため一旦除外
+        # DEPRECATED (2026-05-15): グローバル IRL 集約は修論では未使用
         # "IRL_VariantA": variant_a,
         # "IRL_VariantA_scaled": variant_a_scaled,
         # "IRL_VariantB": variant_b,
@@ -747,7 +754,7 @@ def evaluate_single_timepoint(
 
     # 6.5 ディレクトリ×個人の二値分類評価（卒論と同じ指標）
     clf_methods = {
-        # NOTE: グローバルIRLモデル未配線のため一旦除外
+        # DEPRECATED (2026-05-15): グローバル IRL の continuation_probs は修論では未使用
         # "IRL_VariantA": continuation_probs,
         "RF": rf_probs,
     }
@@ -1136,8 +1143,9 @@ def evaluate_single_timepoint(
         }
 
     # 7. ディレクトリ別詳細テーブル
+    # DEPRECATED (2026-05-15): irl_a / irl_a_s / irl_b カラムはグローバル IRL 時代の遺物
     rows = []
-    for d in sorted(set(actual.keys()) | set(variant_a.keys())):
+    for d in sorted(set(actual.keys()) | set(naive_pred.keys())):
         rows.append(
             {
                 "directory": d,
@@ -1145,9 +1153,9 @@ def evaluate_single_timepoint(
                 "naive": naive_pred.get(d, 0.0),
                 "linear": linear_pred.get(d, 0.0),
                 "rf": rf_pred.get(d, 0.0),
-                "irl_a": variant_a.get(d, 0.0),
-                "irl_a_s": variant_a_scaled.get(d, 0.0),
-                "irl_b": variant_b.get(d, 0.0),
+                # "irl_a": variant_a.get(d, 0.0),
+                # "irl_a_s": variant_a_scaled.get(d, 0.0),
+                # "irl_b": variant_b.get(d, 0.0),
                 "n_past_devs": len(dir_developers.get(d, set())),
             }
         )
@@ -1177,7 +1185,8 @@ def evaluate_single_timepoint(
                 "irl_dir_prob": irl_dir_probs.get(d, {}).get(dev, None),
                 "irl_dir_prob_calibrated": _irl_dir_probs_cal.get(d, {}).get(dev, None),
                 "rf_dir_prob": _rf_dir_dev_probs.get(d, {}).get(dev, None),
-                "irl_global_prob": continuation_probs.get(dev, None),
+                # DEPRECATED (2026-05-15): irl_global_prob はグローバル IRL の遺物
+                # "irl_global_prob": continuation_probs.get(dev, None),
                 "rf_global_prob": rf_probs.get(dev, None),
             }
             pair_rows.append(row)
@@ -1209,16 +1218,19 @@ def main() -> None:
     prediction_time = datetime.fromisoformat(args.prediction_time)
     # history_start: データの最初から
     history_start = df["timestamp"].min().to_pydatetime()
-    if args.irl_model.exists():
-        predictor = BatchContinuationPredictor(
-            model_path=args.irl_model,
-            df=df,
-            history_start=history_start,
-            device=args.device,
-        )
-    else:
-        predictor = None
-        logger.warning(f"グローバルIRLモデルが見つからない: {args.irl_model}（スキップ）")
+    # DEPRECATED (2026-05-15): グローバル IRL モデルは修論では使用しない。
+    # 復活させる場合は --irl-model 引数も argparse 側でアンコメントすること。
+    # if args.irl_model.exists():
+    #     predictor = BatchContinuationPredictor(
+    #         model_path=args.irl_model,
+    #         df=df,
+    #         history_start=history_start,
+    #         device=args.device,
+    #     )
+    # else:
+    #     predictor = None
+    #     logger.warning(f"グローバルIRLモデルが見つからない: {args.irl_model}（スキップ）")
+    predictor = None
 
     if args.multi_timepoint:
         # 複数時点で評価

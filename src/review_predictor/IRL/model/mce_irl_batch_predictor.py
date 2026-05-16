@@ -76,14 +76,20 @@ class MCEBatchContinuationPredictor:
             ACTION_FEATURES,
         )
 
-        # モデルメタデータ (model_class, model_type など) を読み込む
+        # モデルメタデータ (model_class, model_type, path_dim など) を読み込む
         metadata_path = self.model_path.parent / "model_metadata.json"
         model_type = 0
+        metadata_path_dim = None  # metadata から読めれば最優先
+        metadata_state_dim = None
         if metadata_path.exists():
             with open(metadata_path) as f:
                 metadata = json.load(f)
             model_type = metadata.get("model_type", 0)
             model_class = metadata.get("model_class", "")
+            if "path_dim" in metadata:
+                metadata_path_dim = int(metadata["path_dim"])
+            if "state_dim" in metadata:
+                metadata_state_dim = int(metadata["state_dim"])
             if model_class and model_class != "mce_irl":
                 logger.warning(
                     "model_metadata.json の model_class=%s は MCE-IRL ではありません。"
@@ -91,14 +97,38 @@ class MCEBatchContinuationPredictor:
                 )
 
         # state_dim を保存された重みから自動判定
+        # 注: model_type=3 (Two-tower) では state_encoder は state_only 次元で
+        # 初期化されているので、weight shape は total ではなく state_only を返す。
+        # metadata が無ければ path_encoder weight から path_dim を逆算する。
         state_dict = torch.load(
             self.model_path, map_location=self.device, weights_only=True
         )
         state_encoder_weight = state_dict.get("state_encoder.0.weight")
-        if state_encoder_weight is not None:
-            state_dim = state_encoder_weight.shape[1]
+        encoder_in_dim = (
+            state_encoder_weight.shape[1] if state_encoder_weight is not None else 20
+        )
+
+        path_dim = 0
+        if model_type == 3:
+            if metadata_path_dim is not None:
+                path_dim = metadata_path_dim
+            else:
+                # path_encoder.0.weight.shape[1] が path_dim
+                path_enc_w = state_dict.get("path_encoder.0.weight")
+                if path_enc_w is not None:
+                    path_dim = int(path_enc_w.shape[1])
+                else:
+                    logger.warning(
+                        "model_type=3 だが path_encoder weight が見つかりません。"
+                        " path_dim=0 として LSTM ベースライン相当で動作します。"
+                    )
+
+        # total state_dim を確定。metadata が最も信頼できる、なければ
+        # encoder_in_dim + path_dim で再構成。
+        if metadata_state_dim is not None:
+            state_dim = metadata_state_dim
         else:
-            state_dim = 20  # デフォルト
+            state_dim = encoder_in_dim + (path_dim if model_type == 3 else 0)
 
         config = {
             "state_dim": state_dim,
@@ -106,6 +136,7 @@ class MCEBatchContinuationPredictor:
             "hidden_dim": 128,
             "dropout": 0.1,
             "model_type": model_type,
+            "path_dim": path_dim,
         }
         irl_system = MCEIRLSystem(config)
         irl_system.device = self.device
@@ -116,10 +147,11 @@ class MCEBatchContinuationPredictor:
 
         self._irl_system = irl_system
         logger.info(
-            "MCE-IRL モデルをロード: %s (model_type=%d, state_dim=%d)",
+            "MCE-IRL モデルをロード: %s (model_type=%d, state_dim=%d, path_dim=%d)",
             self.model_path,
             model_type,
             state_dim,
+            path_dim,
         )
 
     def _build_monthly_data(

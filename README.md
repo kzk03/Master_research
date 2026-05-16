@@ -54,12 +54,194 @@ docker compose down
 nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
     bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce 0 > logs/main32_mce.log 2>&1 &
 
+# 特徴量重要度も保存する場合 (第4引数に true)
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce_v3_feat26 0 true > logs/main32_mce_v3_feat26.log 2>&1 &
 # ログの確認
 tail -f logs/main32_mce.log
 ```
 
 デフォルトで variant 0 (LSTM) のみ実行。LSTM+Attention / Transformer はスクリプト末尾で
 コメントアウトしてあるので必要時に復元する。詳細は下の Step 1〜7。
+
+### 特徴量改修 v2 — Phase 1 (2026-05-14)
+
+IRL_Dir が RF_Dir に AUC で -0.01〜-0.07 負けている状況を打破するため、`STATE_FEATURES` /
+`PATH_FEATURE_NAMES` に **計 5 つ** の特徴量を追加 (`src/review_predictor/IRL/features/`)。
+
+| 軸 | 追加 | 出典 / 根拠 |
+|---|---|---|
+| state | `n_projects` | Vasilescu CHI 2015 / 自前 finding A-2 (3+プロジェクト参加で IRL +0.019) |
+| state | `cross_project_review_share` | Vasilescu CHI 2015 |
+| state | `same_domain_share` | Baysal EMSE 2016 (organization affiliation) |
+| path | `path_owner_overlap` | Casalnuovo FSE 2015 (tie strength, Jaccard) |
+| ~~path~~ | ~~`path_lcp_similarity`~~ | Thongtanunam SANER 2015 (REVFINDER) — **v2_phase1 評価で RF importance 0.000 のため 2026-05-15 削除** |
+
+設計方針: **LSTM が累積系列から暗黙学習可能な「差分系」(delta, burst, WRC) は追加しない**。
+WRC (Hannebauer ASE 2016) は当初検討したが、smoke test で任意の half-life で既存 count 系
+特徴量 (`total_reviews` / `recent_activity_frequency`) と r ≥ 0.89 の高相関を確認したため除外。
+
+最終次元: state 18→**21**, path 3→**4** (with path 計 26→**30**, lcp 削除後)。
+
+#### サーバ実行 (v2 で再学習・再評価)
+
+旧 26 次元の軌跡キャッシュは `outputs/mce_irl_trajectory_cache/main32/` に残したまま、
+**`CACHE_TAG` を上書きして別ディレクトリに新キャッシュを生成**する。
+RF / RF_Dir は eval スクリプト内で都度学習されるので新特徴量が自動的に反映される。
+
+```bash
+# 0) 最新コードを取得
+git pull
+
+# 1) パイプライン実行 (新 CACHE_TAG + 新 outbase で旧結果と並列保持)
+#    - 軌跡再生成 (~1-2h, CPU)  → outputs/mce_irl_trajectory_cache/main32_v2_phase1/
+#    - MCE-IRL 4 窓学習 (~3-4h, GPU)
+#    - 評価 10 パターン (~30min)
+mkdir -p logs
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    CACHE_TAG=main32_v2_phase1 \
+    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce_v2_phase1 0 true \
+    > logs/main32_mce_v2_phase1.log 2>&1 &
+
+# 2) ログ追跡
+tail -f logs/main32_mce_v2_phase1.log
+```
+
+第 4 引数 `true` は feature importance も保存する指定 (新 5 特徴量が IRL でどれだけ
+重み付けされているかの分析用)。`CACHE_TAG=main32_v2_phase1` 指定により旧 cache
+(`outputs/mce_irl_trajectory_cache/main32/`) は触らず、新 cache を
+`outputs/mce_irl_trajectory_cache/main32_v2_phase1/` に作る。
+
+### 特徴量改修 v2 — Phase 2 (2026-05-15)
+
+Phase 1 だけでは RF_Dir に勝てない見込みに備え、**co-change graph 由来の path 特徴量 2 つ**
+を追加。本研究 finding B-12 (coverage は最強単一予測子 11→56%) と B-3 (hub_score で
+mid_hub AUC 0.884) の知見を直接特徴量に組み込む。
+
+| 軸 | 追加 | 出典 / 根拠 |
+|---|---|---|
+| path | `path_hub_score` | Zanetti ICSE 2013 (HITS hub) / 自前 B-3, B-11 |
+| path | `path_neighbor_coverage` | Zimmermann TSE 2005 (co-change) / **自前 B-12 最強単一予測子** |
+
+最終次元: state 21 + path 6 → **計 32** (lcp 削除後の Phase 1 30 から +2)
+
+#### Phase 2 で追加された生成物
+
+co-change graph を 32 main repos 用に新規構築:
+
+```bash
+# 既存の旧 10-project hub_scores.csv とは別ファイルで保存
+uv run python experiments/dependency_analysis/01b_cochange_graph_main32.py \
+    --raw-json $(cat data/combined_raw_main32.raw_json_list.txt)
+# → experiments/dependency_analysis/results/hub_scores_main32.csv         (1,016 rows)
+# → experiments/dependency_analysis/results/cochange_neighbors_main32.csv (17,498 rows, 8,749 unique pairs)
+```
+
+特徴量計算は `PathFeatureExtractor` のコンストラクタ引数で CSV パスを渡せば自動的に有効化される。
+未指定の呼び出しサイトは新 2 特徴量を 0.0 として動作する (後方互換)。
+
+#### サーバ実行 (v2_phase2 で再学習・再評価)
+
+Phase 1 と同じ要領で `CACHE_TAG` を分け、追加で `HUB_SCORES_CSV` / `COCHANGE_NEIGHBORS_CSV`
+を env で渡す:
+
+```bash
+git pull
+
+mkdir -p logs
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    CACHE_TAG=main32_v2_phase2 \
+    HUB_SCORES_CSV=experiments/dependency_analysis/results/hub_scores_main32.csv \
+    COCHANGE_NEIGHBORS_CSV=experiments/dependency_analysis/results/cochange_neighbors_main32.csv \
+    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce_v2_phase2 0 true \
+    > logs/main32_mce_v2_phase2.log 2>&1 &
+
+tail -f logs/main32_mce_v2_phase2.log
+```
+
+軌跡キャッシュは `outputs/mce_irl_trajectory_cache/main32_v2_phase2/` に新規生成 (Phase 1 と並列保持)。
+co-change graph CSV はサーバ側にも `experiments/dependency_analysis/results/` に push 済みであることを前提とする (git pull で同期される)。
+
+### Two-tower アーキテクチャ — Phase 3 (2026-05-15)
+
+Phase 1/2 結果から、**「特徴量を増やしても RF も同じく拾うので相対優位が出ない」**
+(B-10 の構造問題) が確認された。Two-tower はこの問題に**特徴量ではなくアーキテクチャ**
+で対応する。
+
+#### 構造
+
+```
+state[..., :21] (state_only)  → state_encoder + LSTM → last_hidden
+state[..., 21:] (path 6 dim)  → path_encoder (LayerNorm+ReLU, 最終ステップ直結)
+                                       ↓
+                          concat → reward_predictor (2-unit head)
+```
+
+`MCEIRLNetworkLSTMTwoTower` (`src/review_predictor/IRL/model/mce_irl_predictor.py`)、
+**model_type=3** に登録。`path_dim` は `state_dim - len(STATE_FEATURES)` で自動推定
+(directory-level なら 6)、明示指定も可。
+
+#### 期待効果
+- RF の "path 系直接重み付け" 強みを IRL も獲得 (B-10 で IRL 17.6% → RF 47.8% の
+  importance 集中の差を解消する見込み)
+- LSTM の sequence 強み (state 系の時系列処理) は維持
+
+#### サーバ実行 (Two-tower + Phase 2 path 特徴量)
+
+`run_mce_pipeline.sh` ではデフォルト variant=0 なので、variant スクリプトを直接呼ぶ:
+
+```bash
+git pull
+
+# Filter + raw_json リストは既存 (main32) を再利用
+mkdir -p logs
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    CACHE_TAG=main32_v2_phase2 \
+    REVIEWS=data/combined_raw_main32.csv \
+    RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
+    HUB_SCORES_CSV=experiments/dependency_analysis/results/hub_scores_main32.csv \
+    COCHANGE_NEIGHBORS_CSV=experiments/dependency_analysis/results/cochange_neighbors_main32.csv \
+    bash scripts/variant/run_mce_irl_variant_single.sh 3 lstm_two_tower outputs/main32_mce_v2_phase3_tt 0 true \
+    > logs/main32_mce_v2_phase3_tt.log 2>&1 &
+
+tail -f logs/main32_mce_v2_phase3_tt.log
+```
+
+- 軌跡キャッシュは Phase 2 と同じ (`CACHE_TAG=main32_v2_phase2`) を再利用 (path features は同じ 6 dim)
+- outbase は別 (`outputs/main32_mce_v2_phase3_tt/`) で旧結果と並列保持
+- 4 番目の引数 `3` が variant_id (Two-tower), 5 番目 `lstm_two_tower` が出力ディレクトリ名
+
+#### 完了後の AUC 比較
+
+```bash
+# Phase 1/2/3-way 比較 (ep150 / v2_phase1 / v2_phase2 が揃った時)
+python3 <<'PY'
+import json
+from pathlib import Path
+RUNS = {
+    'ep150':    Path('outputs/main32_mce_ep150/lstm_baseline'),
+    'v2_p1':    Path('outputs/main32_mce_v2_phase1/lstm_baseline'),
+    'v2_p2':    Path('outputs/main32_mce_v2_phase2/lstm_baseline'),
+}
+windows = ['0-3','3-6','6-9','9-12']
+header = f"{'tw':>4} {'ew':>4} | "
+for k in RUNS: header += f"{k+'_IRL':>10} "
+header += f"| {'RF_Dir':>7} | {'gap_p2':>8}"
+print(header); print('-'*len(header))
+for tw_i, tw in enumerate(windows):
+    for ew_i, ew in enumerate(windows):
+        if ew_i < tw_i: continue
+        paths = {k: RUNS[k] / f'train_{tw}m' / f'eval_{ew}m' / 'summary_metrics.json' for k in RUNS}
+        if not all(p.exists() for p in paths.values()): continue
+        ms = {k: json.load(open(paths[k])) for k in RUNS}
+        irls = {k: ms[k]['IRL_Dir']['clf_auc_roc'] for k in RUNS}
+        rfd = ms['v2_p2']['RF_Dir']['clf_auc_roc']
+        gap = irls['v2_p2'] - rfd
+        row = f"{tw:>4} {ew:>4} | "
+        for k in RUNS: row += f"{irls[k]:.4f}    "
+        row += f"| {rfd:.4f} | {gap:+.4f}"
+        print(row)
+PY
+```
 
 ### Step 1. Gerrit データ収集
 
@@ -125,10 +307,37 @@ RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
 bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline \
     outputs/main32_mce_variant 0
 # variant_id: 0=LSTM, 1=LSTM+Attention, 2=Transformer (MCE-IRL は二値 action なので 3-5 は非対応)
+
+# 特徴量重要度も保存する場合 (第5引数に true)
+REVIEWS=data/combined_raw_main32.csv \
+RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
+bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline \
+    outputs/main32_mce_variant 0 true
 ```
 
+特徴量重要度の出力:
+- `<eval_dir>/irl_feature_importance.json` … gradient × input の絶対値重要度 (28次元)
+- `<eval_dir>/irl_feature_importance_signed.json` … 符号付き重要度 (正=継続促進, 負=離脱促進)
+- `<eval_dir>/rf_dir_feature_importance.json` … RF_Dir の Gini importance
+
+#### 既存モデルから重要度だけ取得（再学習不要）
+
+学習済みモデル（`.pt`）があれば、評価スクリプトだけ再実行すれば重要度を取得できる。
+学習はスキップされ（`.pt` が既にあるため）、評価のみ再実行される。
+
+```bash
+# 既存の outputs/main32_mce_ep150 に対して重要度だけ取得
+nohup env OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+    bash scripts/run_mce_pipeline.sh main32 outputs/main32_mce_ep150 0 true \
+    > logs/main32_mce_importance.log 2>&1 &
+```
+
+> ℹ️ `run_mce_irl_variant_single.sh` は学習済み `.pt` が存在すれば学習をスキップし、
+> 評価のみ再実行する。そのため既存モデルからの重要度取得は `--save-importance` を
+> 付けて同じパイプラインを再実行するだけでよい。
+
 固定値: `TRAIN_START=2019-01-01`, `TRAIN_END=2022-01-01`, `EVAL_CUTOFF=2023-01-01`,
-`EPOCHS=50`, `PATIENCE=5`, 評価は `--calibrate --n-jobs 4` で並列。
+`EPOCHS=150`, `PATIENCE=5`, 評価は `--calibrate --n-jobs 8` で並列。
 
 学習スクリプトには `--skip-threshold` を常時付与している（訓練データ上の F1 最適閾値計算は
 46928 軌跡の逐次推論で 1 時間以上かかり、かつメイン評価指標 AUC/Spearman は閾値非依存・

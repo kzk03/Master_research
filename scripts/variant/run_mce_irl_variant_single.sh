@@ -29,11 +29,12 @@ OUTBASE="${3:-outputs/mce_irl_variant_comparison_server}"
 GPU_ID="${4:-0}"
 SAVE_IMPORTANCE="${5:-false}"
 
-# MCE-IRL は variant 0/1/2 のみ対応 (multi-task ヘッドは持たない)
+# MCE-IRL は variant 0/1/2/3 対応 (3 = LSTM Two-tower, 2026-05-15 追加)。
+# multi-task ヘッド (variant 4/5) は持たない。
 case "$VTYPE" in
-    0|1|2) ;;
+    0|1|2|3) ;;
     *)
-        echo "ERROR: MCE-IRL は variant 0/1/2 のみ対応 (指定: $VTYPE)" >&2
+        echo "ERROR: MCE-IRL は variant 0/1/2/3 のみ対応 (指定: $VTYPE)" >&2
         exit 1
         ;;
 esac
@@ -41,33 +42,25 @@ esac
 export CUDA_VISIBLE_DEVICES="$GPU_ID"
 
 # プロジェクト集合の差し替えは環境変数で行う:
-#   REVIEWS              : 統合済み CSV (default: 旧10 repos の data/combined_raw.csv)
+#   REVIEWS              : 統合済み CSV
+#                          (default: data/combined_raw_main32.csv — main32 スコープ)
 #   RAW_JSON_LIST_FILE   : raw_json パスをスペース区切りで持つテキストファイル
-#                          (filter_combined.py の副産物 *.raw_json_list.txt がそのまま使える)
-# 例: REVIEWS=data/combined_raw_main32.csv \
-#     RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
-#     bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline outputs/main32_mce 0
-REVIEWS="${REVIEWS:-data/combined_raw.csv}"
-if [ -n "${RAW_JSON_LIST_FILE:-}" ]; then
-    if [ ! -f "$RAW_JSON_LIST_FILE" ]; then
-        echo "ERROR: RAW_JSON_LIST_FILE が見つからない: $RAW_JSON_LIST_FILE" >&2
-        exit 1
-    fi
-    read -r -a RAW_JSON <<< "$(cat "$RAW_JSON_LIST_FILE")"
-else
-    RAW_JSON=(
-        data/raw_json/openstack__nova.json
-        data/raw_json/openstack__cinder.json
-        data/raw_json/openstack__neutron.json
-        data/raw_json/openstack__ironic.json
-        data/raw_json/openstack__glance.json
-        data/raw_json/openstack__keystone.json
-        data/raw_json/openstack__horizon.json
-        data/raw_json/openstack__swift.json
-        data/raw_json/openstack__heat.json
-        data/raw_json/openstack__octavia.json
-    )
+#                          (default: data/combined_raw_main32.raw_json_list.txt)
+# 例 (別スコープを使う場合):
+#     REVIEWS=data/combined_raw_231.csv \
+#     RAW_JSON_LIST_FILE=path/to/raw_json_list.txt \
+#     bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline outputs/foo 0
+REVIEWS="${REVIEWS:-data/combined_raw_main32.csv}"
+RAW_JSON_LIST_FILE="${RAW_JSON_LIST_FILE:-data/combined_raw_main32.raw_json_list.txt}"
+if [ ! -f "$REVIEWS" ]; then
+    echo "ERROR: REVIEWS CSV が見つからない: $REVIEWS" >&2
+    exit 1
 fi
+if [ ! -f "$RAW_JSON_LIST_FILE" ]; then
+    echo "ERROR: RAW_JSON_LIST_FILE が見つからない: $RAW_JSON_LIST_FILE" >&2
+    exit 1
+fi
+read -r -a RAW_JSON <<< "$(cat "$RAW_JSON_LIST_FILE")"
 TRAIN_START="2019-01-01"
 TRAIN_END="2022-01-01"
 EVAL_CUTOFF="2023-01-01"
@@ -84,6 +77,20 @@ TRAIN_FE=(3 6 9 12)
 CACHE_TAG="${CACHE_TAG:-default}"
 CACHE_DIR="outputs/mce_irl_trajectory_cache/${CACHE_TAG}"
 mkdir -p "$CACHE_DIR"
+
+# Phase 2 (2026-05-15): co-change graph 由来の path 特徴量 CSV
+#   HUB_SCORES_CSV / COCHANGE_NEIGHBORS_CSV を env で渡すと extract と eval に
+#   --hub-scores / --cochange-neighbors を付与する。未指定なら従来通り (新 2 特徴量 0.0)。
+EXTRA_PATH_FEAT_ARGS=()
+if [ -n "${HUB_SCORES_CSV:-}" ] && [ -f "$HUB_SCORES_CSV" ]; then
+    EXTRA_PATH_FEAT_ARGS+=(--hub-scores "$HUB_SCORES_CSV")
+fi
+if [ -n "${COCHANGE_NEIGHBORS_CSV:-}" ] && [ -f "$COCHANGE_NEIGHBORS_CSV" ]; then
+    EXTRA_PATH_FEAT_ARGS+=(--cochange-neighbors "$COCHANGE_NEIGHBORS_CSV")
+fi
+if [ "${#EXTRA_PATH_FEAT_ARGS[@]}" -gt 0 ]; then
+    echo "[Phase 2] path-feature CSVs: ${EXTRA_PATH_FEAT_ARGS[*]}"
+fi
 
 # warm-start 設定 (環境変数で制御):
 #   INIT_FROM_BASE=outputs/variant_comparison_server/$VNAME を指定すると、
@@ -126,6 +133,7 @@ run_eval() {
         --n-jobs 4 \
         --output-dir "$eval_dir" \
         --calibrate \
+        "${EXTRA_PATH_FEAT_ARGS[@]}" \
         $importance_flag
     echo "[MCE-IRL $VNAME train_${train_win}m -> eval_${eval_win}m] 評価完了"
 }
@@ -161,7 +169,8 @@ for i in 0 1 2 3; do
             --future-window-start "$fs" \
             --future-window-end "$fe" \
             --n-jobs -1 \
-            --output "$cache_path"
+            --output "$cache_path" \
+            "${EXTRA_PATH_FEAT_ARGS[@]}"
         echo "[MCE-IRL cache ${win}m] 抽出完了 → $cache_path"
     fi
 done

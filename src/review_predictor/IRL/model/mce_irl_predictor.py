@@ -182,10 +182,127 @@ class MCEIRLNetworkTransformer(_MCEIRLBaseNetwork):
         return self.reward_predictor(flat).view(B, L, self.num_actions)
 
 
+class MCEIRLNetworkLSTMTwoTower(_MCEIRLBaseNetwork):
+    """Two-tower LSTM の MCE-IRL ネットワーク (model_type=3, 2026-05-15 追加)。
+
+    state 入力を 2 つに分割し、別々の経路で処理してから最終層で concat する:
+        state[..., :state_only_dim]  → state_encoder + LSTM (時系列処理)
+        state[..., state_only_dim:]  → path_encoder (バイパス、最終ステップ直結)
+
+    動機 (B-10):
+        RF は path 特徴量 3 dim に importance 47.8% 集中させていたが、
+        IRL は同じ特徴量を 17.6% しか拾えていなかった。原因は LSTM が
+        全特徴量を共有 recurrent dynamics に通すため、強い静的シグナル
+        (path 系) が時系列軸で薄まる "LSTM dilution"。Two-tower で path
+        を LSTM バイパスさせると、RF と同じく「静的シグナルを直接重み付け」
+        できる。
+
+    パラメータ:
+
+    
+        path_dim: state 入力末尾の path 特徴量次元数。0 を指定すると従来の
+                  LSTM ベースライン (model_type=0) と等価。
+    """
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dim: int = 128,
+        dropout: float = 0.1,
+        num_actions: int = 2,
+        path_dim: int = 0,
+    ):
+        if path_dim < 0:
+            raise ValueError(f"path_dim must be >= 0 (got {path_dim})")
+        if path_dim >= state_dim:
+            raise ValueError(
+                f"path_dim ({path_dim}) must be < state_dim ({state_dim})"
+            )
+        state_only_dim = state_dim - path_dim
+        # 親 (_MCEIRLBaseNetwork → BaseIRLNetwork) の state_encoder は
+        # state_only 次元で初期化。reward_predictor は親が hidden_dim 入力で
+        # 作るが、Two-tower では fused_dim 入力に置き換える。
+        super().__init__(state_only_dim, action_dim, hidden_dim, dropout, num_actions)
+        self.total_state_dim = state_dim
+        self.state_only_dim = state_only_dim
+        self.path_dim = path_dim
+        self.backbone = LSTMBackbone(hidden_dim, dropout)
+
+        if path_dim > 0:
+            self.path_encoder = nn.Sequential(
+                nn.Linear(path_dim, hidden_dim // 2),
+                nn.LayerNorm(hidden_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            )
+            fused_dim = hidden_dim + hidden_dim // 2
+        else:
+            self.path_encoder = None
+            fused_dim = hidden_dim
+
+        # 2-unit reward head を fused_dim 入力で再構築 (親の reward_predictor を上書き)
+        self.reward_predictor = nn.Sequential(
+            nn.Linear(fused_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, num_actions),
+        )
+
+    def _split_state(self, state: torch.Tensor):
+        """[B, L, total] → ([B, L, state_only], [B, L, path])."""
+        return (
+            state[..., : self.state_only_dim],
+            state[..., self.state_only_dim :],
+        )
+
+    def _last_step_path(
+        self, path: torch.Tensor, lengths: torch.Tensor
+    ) -> torch.Tensor:
+        """各サンプルの最終 valid step の path 特徴量を取得。[B, L, D] → [B, D]."""
+        B = path.size(0)
+        # padding 部の値は不問だが、有効長を超えると 0 を返す前提
+        idx = (lengths - 1).clamp(min=0).to(path.device)
+        return path[torch.arange(B, device=path.device), idx]
+
+    def forward(self, state, action_features, lengths):
+        s_only, path = self._split_state(state)
+        combined = self._encode(s_only, action_features)
+        _, last_hidden = self.backbone(combined, lengths)
+
+        if self.path_encoder is not None and self.path_dim > 0:
+            path_last = self._last_step_path(path, lengths)
+            path_enc = self.path_encoder(path_last)
+            fused = torch.cat([last_hidden, path_enc], dim=-1)
+        else:
+            fused = last_hidden
+
+        return self.reward_predictor(fused)
+
+    def forward_all_steps(self, state, action_features, lengths):
+        s_only, path = self._split_state(state)
+        combined = self._encode(s_only, action_features)
+        lstm_out, _ = self.backbone(combined, lengths)  # [B, L, hidden]
+
+        if self.path_encoder is not None and self.path_dim > 0:
+            B, L, _ = path.shape
+            path_enc = self.path_encoder(
+                path.reshape(-1, self.path_dim)
+            ).view(B, L, -1)
+            fused = torch.cat([lstm_out, path_enc], dim=-1)
+        else:
+            fused = lstm_out
+
+        B, L, D = fused.shape
+        flat = fused.reshape(-1, D)
+        return self.reward_predictor(flat).view(B, L, self.num_actions)
+
+
 _MCE_REGISTRY = {
     0: MCEIRLNetworkLSTM,
     1: MCEIRLNetworkAttention,
     2: MCEIRLNetworkTransformer,
+    3: MCEIRLNetworkLSTMTwoTower,  # 2026-05-15 追加 (state-only LSTM + path bypass)
 }
 
 
@@ -196,11 +313,18 @@ def create_mce_network(
     hidden_dim: int = 128,
     dropout: float = 0.1,
     num_actions: int = 2,
+    path_dim: int = 0,
 ) -> _MCEIRLBaseNetwork:
     if variant not in _MCE_REGISTRY:
         raise ValueError(
-            f"MCE-IRL ではバリアント {variant} は未対応 (0/1/2 のみ)"
+            f"MCE-IRL ではバリアント {variant} は未対応 (0/1/2/3 のみ)"
         )
+    if variant == 3:
+        return _MCE_REGISTRY[variant](
+            state_dim, action_dim, hidden_dim, dropout, num_actions,
+            path_dim=path_dim,
+        )
+    # 0/1/2 は path_dim 不要 (受け取らないシグネチャ)
     return _MCE_REGISTRY[variant](
         state_dim, action_dim, hidden_dim, dropout, num_actions
     )
@@ -232,6 +356,13 @@ class MCEIRLSystem(RetentionIRLSystem):
         self.dropout = config.get("dropout", 0.1)
         self.output_temperature = float(config.get("output_temperature", 1.0))
 
+        # Two-tower (model_type=3) 用の path_dim。
+        # 未指定なら state_dim - len(STATE_FEATURES) で自動推定 (path 特徴量込みなら正)。
+        # directory-level でなく path 込みでない state_dim なら path_dim=0。
+        self.path_dim = int(
+            config.get("path_dim", max(0, self.state_dim - len(STATE_FEATURES)))
+        )
+
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
@@ -244,6 +375,7 @@ class MCEIRLSystem(RetentionIRLSystem):
             self.hidden_dim,
             self.dropout,
             num_actions=self.NUM_ACTIONS,
+            path_dim=self.path_dim,
         ).to(self.device)
 
         self.optimizer = optim.AdamW(
@@ -261,10 +393,11 @@ class MCEIRLSystem(RetentionIRLSystem):
         self.bce_loss = nn.BCELoss()
 
         logger.info(
-            "MCE-IRL システムを初期化 (state_dim=%d, action_dim=%d, model_type=%d)",
+            "MCE-IRL システムを初期化 (state_dim=%d, action_dim=%d, model_type=%d, path_dim=%d)",
             self.state_dim,
             self.action_dim,
             self.model_type,
+            self.path_dim,
         )
 
     # -----------------------------------------------------------------
@@ -972,8 +1105,9 @@ class MCEIRLSystem(RetentionIRLSystem):
 
 
 if __name__ == "__main__":
+    from review_predictor.IRL.features.common_features import STATE_FEATURES_WITH_PATH
     cfg = {
-        "state_dim": 23,
+        "state_dim": len(STATE_FEATURES_WITH_PATH),
         "action_dim": len(ACTION_FEATURES),
         "hidden_dim": 128,
         "dropout": 0.1,

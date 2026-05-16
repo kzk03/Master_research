@@ -1201,6 +1201,15 @@ def main():
              " 閾値は 46928 軌跡の逐次推論で 1 時間以上かかるため、AUC/Spearman ベース"
              " 評価しか使わない場合は不要。"
     )
+    # Phase 2 (2026-05-15): co-change graph 由来の path 特徴量用 CSV
+    # 軌跡キャッシュを使わず内部抽出する場合のみ effective。
+    # キャッシュ経由なら extract_mce_trajectories.py 側に渡してください。
+    parser.add_argument(
+        "--hub-scores", type=str, default=None,
+        help="experiments/dependency_analysis/results/hub_scores_main32.csv")
+    parser.add_argument(
+        "--cochange-neighbors", type=str, default=None,
+        help="experiments/dependency_analysis/results/cochange_neighbors_main32.csv")
     args = parser.parse_args()
     
     # 出力ディレクトリを作成
@@ -1254,11 +1263,19 @@ def main():
                     f"  → イベント単位で学習する場合は train_mce_event_irl.py を使用してください。"
                 )
             # state_dim をキャッシュ内容から推定して args との不整合を検出する
-            # (path_features_per_step が空ならグローバル IRL = state_dim 20、
-            #  存在すれば directory-level = state_dim 23)
+            # (path_features_per_step が空ならグローバル IRL、存在すれば directory-level)
+            # 特徴量定義の改訂で state_dim は変動するため STATE_FEATURES / STATE_FEATURES_WITH_PATH の長さを使う
+            from review_predictor.IRL.features.common_features import (
+                STATE_FEATURES,
+                STATE_FEATURES_WITH_PATH,
+            )
             has_path_features = bool(sample.get("path_features_per_step"))
-            inferred_state_dim = 23 if has_path_features else 20
-            expected_state_dim = 23 if args.directory_level else 20
+            inferred_state_dim = (
+                len(STATE_FEATURES_WITH_PATH) if has_path_features else len(STATE_FEATURES)
+            )
+            expected_state_dim = (
+                len(STATE_FEATURES_WITH_PATH) if args.directory_level else len(STATE_FEATURES)
+            )
             if inferred_state_dim != expected_state_dim:
                 raise ValueError(
                     f"キャッシュ {cache_path} は state_dim={inferred_state_dim} 用ですが、"
@@ -1287,7 +1304,12 @@ def main():
                 'reviewer_email': 'email',
                 'request_time': 'timestamp',
             })
-            path_extractor = PathFeatureExtractor(df_for_path, window_days=180)
+            path_extractor = PathFeatureExtractor(
+                df_for_path,
+                window_days=180,
+                hub_scores_path=args.hub_scores,
+                cochange_neighbors_path=args.cochange_neighbors,
+            )
 
             from review_predictor.IRL.model.network_variants import is_multitask
             _multitask = is_multitask(args.model_type)
@@ -1308,7 +1330,8 @@ def main():
                 traj["step_actions"] = [
                     int(bool(l)) for l in traj.get("step_labels", [])
                 ]
-            state_dim = 23  # 20 + path(3)
+            from review_predictor.IRL.features.common_features import STATE_FEATURES_WITH_PATH
+            state_dim = len(STATE_FEATURES_WITH_PATH)  # state + path
 
             # キャッシュ保存
             if cache_path:
@@ -1328,7 +1351,8 @@ def main():
                 project=args.project,
                 negative_oversample_factor=args.negative_oversample_factor
             )
-            state_dim = 20  # v2: STATE_FEATURES(20) + ACTION_FEATURES(5)
+            from review_predictor.IRL.features.common_features import STATE_FEATURES
+            state_dim = len(STATE_FEATURES)  # v2: state のみ (path なし)
 
         if not train_trajectories:
             logger.error("訓練用軌跡が抽出できませんでした")
@@ -1435,6 +1459,9 @@ def main():
             'warm_start_from': str(args.init_from) if args.init_from else None,
             'init_lr_scale': args.init_lr_scale if args.init_from else None,
             'effective_lr': effective_lr,
+            # Two-tower (model_type=3) 時の path_dim を記録 (推論時に必要)。
+            # 他 model_type ではゼロを書く。
+            'path_dim': int(getattr(irl_system, 'path_dim', 0)),
         }
         metadata_path = output_dir / "model_metadata.json"
         with open(metadata_path, 'w') as f:

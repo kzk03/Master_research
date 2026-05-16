@@ -57,6 +57,12 @@ def main():
     parser.add_argument("--n-jobs", type=int, default=-1,
                         help="joblib 並列数（-1=全コア）")
     parser.add_argument("--output", type=str, required=True, help="出力 .pkl パス")
+    # Phase 2 (2026-05-15): co-change graph 由来の path 特徴量用 CSV を渡す
+    # 未指定なら path_hub_score / path_neighbor_coverage は 0.0 (後方互換)
+    parser.add_argument("--hub-scores", type=str, default=None,
+                        help="experiments/dependency_analysis/results/hub_scores_main32.csv")
+    parser.add_argument("--cochange-neighbors", type=str, default=None,
+                        help="experiments/dependency_analysis/results/cochange_neighbors_main32.csv")
     args = parser.parse_args()
 
     output_path = Path(args.output)
@@ -91,7 +97,12 @@ def main():
         "reviewer_email": "email",
         "request_time": "timestamp",
     })
-    path_extractor = PathFeatureExtractor(df_for_path, window_days=180)
+    path_extractor = PathFeatureExtractor(
+        df_for_path,
+        window_days=180,
+        hub_scores_path=args.hub_scores,
+        cochange_neighbors_path=args.cochange_neighbors,
+    )
 
     # 軌跡抽出（並列化）
     logger.info(f"軌跡抽出開始 (multitask={args.multitask}, n_jobs={args.n_jobs})")
