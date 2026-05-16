@@ -29,11 +29,12 @@ OUTBASE="${3:-outputs/mce_irl_variant_comparison_server}"
 GPU_ID="${4:-0}"
 SAVE_IMPORTANCE="${5:-false}"
 
-# MCE-IRL は variant 0/1/2 のみ対応 (multi-task ヘッドは持たない)
+# MCE-IRL は variant 0/1/2/3 対応 (3 = LSTM Two-tower, 2026-05-15 追加)。
+# multi-task ヘッド (variant 4/5) は持たない。
 case "$VTYPE" in
-    0|1|2) ;;
+    0|1|2|3) ;;
     *)
-        echo "ERROR: MCE-IRL は variant 0/1/2 のみ対応 (指定: $VTYPE)" >&2
+        echo "ERROR: MCE-IRL は variant 0/1/2/3 のみ対応 (指定: $VTYPE)" >&2
         exit 1
         ;;
 esac
@@ -41,33 +42,25 @@ esac
 export CUDA_VISIBLE_DEVICES="$GPU_ID"
 
 # プロジェクト集合の差し替えは環境変数で行う:
-#   REVIEWS              : 統合済み CSV (default: 旧10 repos の data/combined_raw.csv)
+#   REVIEWS              : 統合済み CSV
+#                          (default: data/combined_raw_main32.csv — main32 スコープ)
 #   RAW_JSON_LIST_FILE   : raw_json パスをスペース区切りで持つテキストファイル
-#                          (filter_combined.py の副産物 *.raw_json_list.txt がそのまま使える)
-# 例: REVIEWS=data/combined_raw_main32.csv \
-#     RAW_JSON_LIST_FILE=data/combined_raw_main32.raw_json_list.txt \
-#     bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline outputs/main32_mce 0
-REVIEWS="${REVIEWS:-data/combined_raw.csv}"
-if [ -n "${RAW_JSON_LIST_FILE:-}" ]; then
-    if [ ! -f "$RAW_JSON_LIST_FILE" ]; then
-        echo "ERROR: RAW_JSON_LIST_FILE が見つからない: $RAW_JSON_LIST_FILE" >&2
-        exit 1
-    fi
-    read -r -a RAW_JSON <<< "$(cat "$RAW_JSON_LIST_FILE")"
-else
-    RAW_JSON=(
-        data/raw_json/openstack__nova.json
-        data/raw_json/openstack__cinder.json
-        data/raw_json/openstack__neutron.json
-        data/raw_json/openstack__ironic.json
-        data/raw_json/openstack__glance.json
-        data/raw_json/openstack__keystone.json
-        data/raw_json/openstack__horizon.json
-        data/raw_json/openstack__swift.json
-        data/raw_json/openstack__heat.json
-        data/raw_json/openstack__octavia.json
-    )
+#                          (default: data/combined_raw_main32.raw_json_list.txt)
+# 例 (別スコープを使う場合):
+#     REVIEWS=data/combined_raw_231.csv \
+#     RAW_JSON_LIST_FILE=path/to/raw_json_list.txt \
+#     bash scripts/variant/run_mce_irl_variant_single.sh 0 lstm_baseline outputs/foo 0
+REVIEWS="${REVIEWS:-data/combined_raw_main32.csv}"
+RAW_JSON_LIST_FILE="${RAW_JSON_LIST_FILE:-data/combined_raw_main32.raw_json_list.txt}"
+if [ ! -f "$REVIEWS" ]; then
+    echo "ERROR: REVIEWS CSV が見つからない: $REVIEWS" >&2
+    exit 1
 fi
+if [ ! -f "$RAW_JSON_LIST_FILE" ]; then
+    echo "ERROR: RAW_JSON_LIST_FILE が見つからない: $RAW_JSON_LIST_FILE" >&2
+    exit 1
+fi
+read -r -a RAW_JSON <<< "$(cat "$RAW_JSON_LIST_FILE")"
 TRAIN_START="2019-01-01"
 TRAIN_END="2022-01-01"
 EVAL_CUTOFF="2023-01-01"

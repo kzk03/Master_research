@@ -1459,6 +1459,9 @@ def main():
             'warm_start_from': str(args.init_from) if args.init_from else None,
             'init_lr_scale': args.init_lr_scale if args.init_from else None,
             'effective_lr': effective_lr,
+            # Two-tower (model_type=3) 時の path_dim を記録 (推論時に必要)。
+            # 他 model_type ではゼロを書く。
+            'path_dim': int(getattr(irl_system, 'path_dim', 0)),
         }
         metadata_path = output_dir / "model_metadata.json"
         with open(metadata_path, 'w') as f:
